@@ -16,9 +16,9 @@ fn main() {
     let documents: Vec<String> = archive
         .file_names()
         .filter(|name| name.contains(".xml"))
-        .map(|name| name.to_owned())
+        .map(str::to_owned)
         .collect();
-    parse(&zip_memmap, "DBDB", &documents)
+    parse(&zip_memmap, "DBDB", &documents);
 }
 
 fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
@@ -28,27 +28,25 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
         .map(|doc| {
             let zip_cursor = std::io::Cursor::new(archive);
             let mut archive = ZipArchive::new(zip_cursor).expect("failed to read zip");
-            let file = archive.by_name(&doc).expect("failed to find document");
+            let file = archive.by_name(doc).expect("failed to find document");
             if file.is_dir() {
-                return NetexData::default();
+                return Vec::new();
             }
-            let size = file.size() as usize;
-            parser::NetexData::from_xml(file, size).unwrap_or_default()
+            let size = file.size().try_into().expect("u64 does not fit usize");
+            vec![parser::NetexData::from_xml(file, size).unwrap_or_default()]
         })
-        .reduce(
-            || NetexData::default(),
-            |mut accum, item| {
-                accum.append(item);
-                accum
-            },
-        );
+        .reduce(Vec::<NetexData>::new, |mut accum, item| {
+            accum.extend(item);
+            accum
+        });
     println!("deduping...");
     let graph = graph::Graph::from_data(&data);
+    let route_count: usize = data.iter().map(|d| d.service_journeys.len()).sum();
     println!(
         "{} has {} deduped nodes and {} deduped edges and {} timetabled routes.",
         key,
         graph.nodes.len(),
         graph.edges.len(),
-        data.service_journeys.len()
+        route_count,
     );
 }

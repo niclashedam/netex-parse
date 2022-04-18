@@ -38,13 +38,6 @@ pub struct NetexData {
 }
 
 impl NetexData {
-    pub fn append(&mut self, other: NetexData) {
-        self.scheduled_stop_points
-            .extend(other.scheduled_stop_points);
-        self.points_in_squence.extend(other.points_in_squence);
-        self.service_journeys.extend(other.service_journeys);
-    }
-
     pub fn from_xml(
         mut read: impl std::io::Read,
         size: usize,
@@ -62,27 +55,29 @@ impl NetexData {
             .collect();
         data.scheduled_stop_points = nodes?;
 
-        let points: Result<Vec<PointsInSequence>, Box<dyn std::error::Error>> = document
+        let points: Vec<PointsInSequence> = document
             .descendants()
             .filter(|node| node.tag_name().name() == "pointsInSequence")
             .map(|node| NetexData::parse_points_in_sequence(&node))
             .collect();
-        data.points_in_squence = points?;
+        data.points_in_squence = points;
 
-        let journeys: Result<Vec<ServiceJourney>, Box<dyn std::error::Error>> = document
+        let journeys: Vec<ServiceJourney> = document
             .descendants()
             .filter(|node| node.tag_name().name() == "ServiceJourney")
             .map(|node| NetexData::parse_service_journey(&node))
             .collect();
-        data.service_journeys = journeys?;
-        return Ok(data);
+        data.service_journeys = journeys;
+        Ok(data)
     }
 
     fn parse_scheduled_stop_point(
         node: &roxmltree::Node,
     ) -> Result<ScheduledStopPoint, Box<dyn std::error::Error>> {
-        let mut result = ScheduledStopPoint::default();
-        result.id = node.attribute("id").unwrap_or_default().to_owned();
+        let mut result = ScheduledStopPoint {
+            id: node.attribute("id").unwrap_or_default().to_owned(),
+            ..ScheduledStopPoint::default()
+        };
         for child in node.descendants() {
             match child.tag_name().name() {
                 "ShortName" => result.short_name = child.text().unwrap_or_default().to_owned(),
@@ -91,19 +86,19 @@ impl NetexData {
                 _ => {}
             }
         }
-        return Ok(result);
+        Ok(result)
     }
 
-    fn parse_points_in_sequence(
-        node: &roxmltree::Node,
-    ) -> Result<PointsInSequence, Box<dyn std::error::Error>> {
+    fn parse_points_in_sequence(node: &roxmltree::Node) -> PointsInSequence {
         let mut result = PointsInSequence::default();
         for sub_node in node.descendants() {
             if sub_node.tag_name().name() != "StopPointInJourneyPattern" {
                 continue;
             }
-            let mut stop = StopPointInJourneyPattern::default();
-            stop.id = sub_node.attribute("id").unwrap_or_default().to_owned();
+            let mut stop = StopPointInJourneyPattern {
+                id: sub_node.attribute("id").unwrap_or_default().to_owned(),
+                ..StopPointInJourneyPattern::default()
+            };
             stop.scheduled_stop_point = sub_node
                 .descendants()
                 .find(|child| child.tag_name().name() == "ScheduledStopPointRef")
@@ -111,12 +106,10 @@ impl NetexData {
                 .unwrap_or_default();
             result.stops.push(stop);
         }
-        return Ok(result);
+        result
     }
 
-    fn parse_service_journey(
-        node: &roxmltree::Node,
-    ) -> Result<ServiceJourney, Box<dyn std::error::Error>> {
+    fn parse_service_journey(node: &roxmltree::Node) -> ServiceJourney {
         let mut result = ServiceJourney::default();
         let passing_times_node = node
             .descendants()
@@ -131,21 +124,21 @@ impl NetexData {
                 match child.tag_name().name() {
                     "StopPointInJourneyPatternRef" => {
                         timetabled_passing_time.stop_point_in_journey_pattern =
-                            child.attribute("ref").unwrap_or_default().to_owned()
+                            child.attribute("ref").unwrap_or_default().to_owned();
                     }
                     "ArrivalTime" => {
                         timetabled_passing_time.arrival =
-                            child.text().unwrap_or_default().to_owned()
+                            child.text().unwrap_or_default().to_owned();
                     }
                     "DepartureTime" => {
                         timetabled_passing_time.departure =
-                            child.text().unwrap_or_default().to_owned()
+                            child.text().unwrap_or_default().to_owned();
                     }
                     _ => {}
                 }
             }
             result.passing_times.push(timetabled_passing_time);
         }
-        return Ok(result);
+        result
     }
 }
