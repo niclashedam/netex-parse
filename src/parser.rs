@@ -1,4 +1,19 @@
 #[derive(Default)]
+pub struct DayTypeAssignment {
+    pub operating_period: String,
+    pub day_type: String,
+    pub is_available: bool,
+}
+
+#[derive(Default)]
+pub struct UicOperatingPeriod {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub valid_day_bits: String,
+}
+
+#[derive(Default)]
 pub struct ScheduledStopPoint {
     pub id: String,
     pub short_name: String,
@@ -28,6 +43,7 @@ pub struct TimetabledPassingTime {
 #[derive(Default)]
 pub struct ServiceJourney {
     pub passing_times: Vec<TimetabledPassingTime>,
+    pub day_type: String,
 }
 
 #[derive(Default)]
@@ -35,6 +51,8 @@ pub struct NetexData {
     pub scheduled_stop_points: Vec<ScheduledStopPoint>,
     pub points_in_squence: Vec<PointsInSequence>,
     pub service_journeys: Vec<ServiceJourney>,
+    pub operating_periods: Vec<UicOperatingPeriod>,
+    pub day_type_assignments: Vec<DayTypeAssignment>,
 }
 
 impl NetexData {
@@ -68,6 +86,21 @@ impl NetexData {
             .map(|node| NetexData::parse_service_journey(&node))
             .collect();
         data.service_journeys = journeys;
+
+        let operating_periods: Vec<UicOperatingPeriod> = document
+            .descendants()
+            .filter(|node| node.tag_name().name() == "UicOperatingPeriod")
+            .map(|node| NetexData::parse_operating_period(&node))
+            .collect();
+        data.operating_periods = operating_periods;
+
+        let day_type_assignments: Result<Vec<DayTypeAssignment>, Box<dyn std::error::Error>> =
+            document
+                .descendants()
+                .filter(|node| node.tag_name().name() == "DayTypeAssignment")
+                .map(|node| NetexData::parse_day_type_assignment(&node))
+                .collect();
+        data.day_type_assignments = day_type_assignments?;
         Ok(data)
     }
 
@@ -110,7 +143,16 @@ impl NetexData {
     }
 
     fn parse_service_journey(node: &roxmltree::Node) -> ServiceJourney {
-        let mut result = ServiceJourney::default();
+        let day_type = node
+            .descendants()
+            .find(|node| node.tag_name().name() == "DayTypeRef")
+            .unwrap()
+            .attribute("ref")
+            .unwrap_or_default();
+        let mut result = ServiceJourney {
+            day_type: day_type.to_owned(),
+            ..ServiceJourney::default()
+        };
         let passing_times_node = node
             .descendants()
             .find(|node| node.tag_name().name() == "passingTimes")
@@ -140,5 +182,45 @@ impl NetexData {
             result.passing_times.push(timetabled_passing_time);
         }
         result
+    }
+
+    fn parse_operating_period(node: &roxmltree::Node) -> UicOperatingPeriod {
+        let mut result = UicOperatingPeriod {
+            id: node.attribute("id").unwrap_or_default().to_owned(),
+            ..UicOperatingPeriod::default()
+        };
+        for child in node.descendants() {
+            match child.tag_name().name() {
+                "FromDate" => result.from = child.text().unwrap_or_default().to_owned(),
+                "ToDate" => result.to = child.text().unwrap_or_default().to_owned(),
+                "ValidDayBits" => {
+                    result.valid_day_bits = child.text().unwrap_or_default().to_owned()
+                }
+                _ => {}
+            }
+        }
+        return result;
+    }
+
+    fn parse_day_type_assignment(
+        node: &roxmltree::Node,
+    ) -> Result<DayTypeAssignment, Box<dyn std::error::Error>> {
+        let mut assignment = DayTypeAssignment::default();
+        for child in node.descendants() {
+            match child.tag_name().name() {
+                "OperatingPeriodRef" => {
+                    assignment.operating_period =
+                        child.attribute("ref").unwrap_or_default().to_owned()
+                }
+                "DayTypeRef" => {
+                    assignment.day_type = child.attribute("ref").unwrap_or_default().to_owned()
+                }
+                "isAvailable" => {
+                    assignment.is_available = child.text().unwrap_or_default().parse()?
+                }
+                _ => {}
+            }
+        }
+        return Ok(assignment);
     }
 }

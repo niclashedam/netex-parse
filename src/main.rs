@@ -15,7 +15,7 @@ fn main() {
     let archive = ZipArchive::new(zip_cursor).expect("failed to read zip");
     let documents: Vec<String> = archive
         .file_names()
-        .filter(|name| name.contains(".xml"))
+        .filter(|name| name.contains("DBDB"))
         .map(str::to_owned)
         .collect();
     parse(&zip_memmap, "DBDB", &documents);

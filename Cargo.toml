@@ -10,4 +10,4 @@ indicatif = {version = "0.16.0", features = ["rayon"]}
 memmap = "0.7.0"
 rayon = "1.5.2"
 roxmltree = "0.14.1"
-zip = "0.6.2"
+zip = { version = "0.6.2", default-features = false, features = ["deflate"] }
