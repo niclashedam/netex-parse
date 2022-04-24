@@ -5,6 +5,7 @@ use zip::ZipArchive;
 use crate::parser::NetexData;
 
 mod graph;
+mod neo4j;
 mod parser;
 
 fn main() {
@@ -15,7 +16,7 @@ fn main() {
     let archive = ZipArchive::new(zip_cursor).expect("failed to read zip");
     let documents: Vec<String> = archive
         .file_names()
-        .filter(|name| name.contains("DBDB"))
+        .filter(|name| name.contains("DBDB_80"))
         .map(str::to_owned)
         .collect();
     parse(&zip_memmap, "DBDB", &documents);
@@ -49,4 +50,12 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
         graph.edges.len(),
         route_count,
     );
+    neo4j::push_graph_sync(
+        &graph,
+        neo4j::ConnectionParameters {
+            uri: "localhost:7687".to_owned(),
+            user: "".to_owned(),
+            password: "".to_owned(),
+        },
+    ).unwrap();
 }

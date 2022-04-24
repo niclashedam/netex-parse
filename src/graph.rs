@@ -1,6 +1,6 @@
 use crate::parser::NetexData;
 
-#[derive(Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Node {
     pub short_name: String,
     pub long: f32,
@@ -42,14 +42,14 @@ impl Graph {
                 }
             }
         }
-        let mut nodes = Vec::<Node>::new();
+        let mut nodes = vec![Node::default(); node_map.len()];
         for idx in node_map.values() {
             let current = &data[idx.data].scheduled_stop_points[idx.stop];
-            nodes.push(Node {
+            nodes[idx.node] = Node {
                 short_name: current.short_name.clone(),
                 long: current.long,
                 lat: current.lat,
-            });
+            };
         }
 
         let mut edges = Vec::<(usize, usize)>::new();
