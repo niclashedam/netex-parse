@@ -44,6 +44,7 @@ pub struct TimetabledPassingTime {
 pub struct ServiceJourney {
     pub passing_times: Vec<TimetabledPassingTime>,
     pub day_type: String,
+    pub transport_mode: String,
 }
 
 #[derive(Default)]
@@ -149,8 +150,15 @@ impl NetexData {
             .unwrap()
             .attribute("ref")
             .unwrap_or_default();
+        let transport_mode = node
+            .descendants()
+            .find(|node| node.tag_name().name() == "TransportMode")
+            .unwrap()
+            .text()
+            .unwrap_or_default();
         let mut result = ServiceJourney {
             day_type: day_type.to_owned(),
+            transport_mode: transport_mode.to_owned(),
             ..ServiceJourney::default()
         };
         let passing_times_node = node
