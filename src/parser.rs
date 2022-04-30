@@ -5,7 +5,7 @@ pub struct DayTypeAssignment {
     pub is_available: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct UicOperatingPeriod {
     pub id: String,
     pub from: String,

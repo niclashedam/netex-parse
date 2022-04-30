@@ -8,9 +8,11 @@ edition = "2021"
 [dependencies]
 indicatif = {version = "0.16.0", features = ["rayon"]}
 memmap = "0.7.0"
-neo4rs = "0.5.9"
+neo4rs = { git = "https://github.com/Nuckal777/neo4rs" }
 rayon = "1.5.2"
 roxmltree = "0.14.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tokio = "1.17.0"
 tokio-stream = "0.1.8"
 zip = { version = "0.6.2", default-features = false, features = ["deflate"] }
