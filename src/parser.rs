@@ -8,9 +8,9 @@ pub struct DayTypeAssignment {
 #[derive(Clone, Default)]
 pub struct UicOperatingPeriod {
     pub id: String,
-    pub from: String,
-    pub to: String,
-    pub valid_day_bits: String,
+    pub from: u32,
+    pub to: u32,
+    pub valid_day_bits: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -36,8 +36,8 @@ pub struct PointsInSequence {
 #[derive(Default)]
 pub struct TimetabledPassingTime {
     pub stop_point_in_journey_pattern: String,
-    pub arrival: String,
-    pub departure: String,
+    pub arrival: u16,
+    pub departure: u16,
 }
 
 #[derive(Default)]
@@ -178,11 +178,11 @@ impl NetexData {
                     }
                     "ArrivalTime" => {
                         timetabled_passing_time.arrival =
-                            child.text().unwrap_or_default().to_owned();
+                            Self::parse_minutes(child.text().unwrap_or_default());
                     }
                     "DepartureTime" => {
                         timetabled_passing_time.departure =
-                            child.text().unwrap_or_default().to_owned();
+                            Self::parse_minutes(child.text().unwrap_or_default());
                     }
                     _ => {}
                 }
@@ -199,10 +199,11 @@ impl NetexData {
         };
         for child in node.descendants() {
             match child.tag_name().name() {
-                "FromDate" => result.from = child.text().unwrap_or_default().to_owned(),
-                "ToDate" => result.to = child.text().unwrap_or_default().to_owned(),
+                "FromDate" => result.from = Self::parse_date(child.text().unwrap_or_default()),
+                "ToDate" => result.to = Self::parse_date(child.text().unwrap_or_default()),
                 "ValidDayBits" => {
-                    result.valid_day_bits = child.text().unwrap_or_default().to_owned()
+                    result.valid_day_bits =
+                        Self::parse_day_bits(child.text().unwrap_or_default().to_owned())
                 }
                 _ => {}
             }
@@ -230,5 +231,76 @@ impl NetexData {
             }
         }
         return Ok(assignment);
+    }
+
+    // In netex departure and arrival time are reqpresented as hh:mm:ss
+    // seconds are mostly 00 anyway, so we only care about the minute of day
+    // lets also assume times are represented as ascii chars
+    fn parse_minutes(value: &str) -> u16 {
+        const ASCII_ZERO: u16 = 48;
+        let bytes = value.as_bytes();
+        let mut result = 0_u16;
+        result += (bytes[0] as u16 - ASCII_ZERO) * 600;
+        result += (bytes[1] as u16 - ASCII_ZERO) * 60;
+        result += (bytes[3] as u16 - ASCII_ZERO) * 10;
+        result += bytes[4] as u16 - ASCII_ZERO;
+        result
+    }
+
+    // Parses "2022-06-13T00:00:00" as 220613
+    fn parse_date(value: &str) -> u32 {
+        const ASCII_ZERO: u32 = 48;
+        let bytes = value.as_bytes();
+        let mut result = 0_u32;
+        result += (bytes[2] as u32 - ASCII_ZERO) * 100000;
+        result += (bytes[3] as u32 - ASCII_ZERO) * 10000;
+        result += (bytes[5] as u32 - ASCII_ZERO) * 1000;
+        result += (bytes[6] as u32 - ASCII_ZERO) * 100;
+        result += (bytes[8] as u32 - ASCII_ZERO) * 10;
+        result += bytes[9] as u32 - ASCII_ZERO;
+        result
+    }
+
+    // Parses "11001100"... as Vec<u8>
+    fn parse_day_bits(mut value: String) -> Vec<u8> {
+        let pad_len = 8 - (value.as_bytes().len() % 8);
+        if pad_len != 8 {
+            value.push_str(&"0".repeat(pad_len));
+        }
+        let mut result = Vec::<u8>::with_capacity(value.len() / 8);
+        for group in value.as_bytes().chunks(8) {
+            result.push(Self::parse_day_bit_group(group))
+        }
+        result
+    }
+
+    // value should be at least 8 byte long
+    fn parse_day_bit_group(value: &[u8]) -> u8 {
+        const ASCII_ZERO: u8 = 48;
+        let mut result = 0_u8;
+        for i in 0..8 {
+            result |= (value[i] - ASCII_ZERO) << i;
+        }
+        result
+    }
+}
+
+mod tests {
+    #[test]
+    fn parse_minutes() {
+        let result = super::NetexData::parse_minutes("12:34");
+        assert_eq!(result, 754);
+    }
+
+    #[test]
+    fn parse_day_bits_group() {
+        let result = super::NetexData::parse_day_bits("1111111011".to_owned());
+        assert_eq!(&result, &[127, 3]);
+    }
+
+    #[test]
+    fn parse_date() {
+        let result = super::NetexData::parse_date("2022-06-13T00:00:00");
+        assert_eq!(result, 220613);
     }
 }

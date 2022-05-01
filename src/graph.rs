@@ -10,9 +10,9 @@ pub struct Node {
 #[derive(Debug, serde::Serialize)]
 pub struct Journey {
     #[serde(rename(serialize = "d"))]
-    pub departure: String,
+    pub departure: u16,
     #[serde(rename(serialize = "a"))]
-    pub arrival: String,
+    pub arrival: u16,
     #[serde(rename(serialize = "t"))]
     pub transport_mode: String,
     #[serde(rename(serialize = "o"))]
@@ -22,9 +22,9 @@ pub struct Journey {
 #[derive(Debug, serde::Serialize)]
 pub struct OperatingPeriod {
     #[serde(rename(serialize = "f"))]
-    pub from: String,
+    pub from: u32,
     #[serde(rename(serialize = "t"))]
-    pub to: String,
+    pub to: u32,
     #[serde(rename(serialize = "v"))]
     pub valid_day_bits: String,
 }
@@ -139,8 +139,8 @@ impl Graph {
                         timetable: Timetable::default(),
                     });
                     entry.timetable.journeys.push(Journey {
-                        departure: current.departure.clone(),
-                        arrival: current.arrival.clone(),
+                        departure: pre.departure,
+                        arrival: current.arrival,
                         transport_mode: journey.transport_mode.clone(),
                         operating_period: period_idx.unwrap(),
                     });
@@ -158,7 +158,7 @@ impl Graph {
                 .map(|op| OperatingPeriod {
                     from: op.from,
                     to: op.to,
-                    valid_day_bits: op.valid_day_bits,
+                    valid_day_bits: base64::encode(op.valid_day_bits),
                 })
                 .collect();
         }

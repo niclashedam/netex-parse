@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+base64 = "0.13.0"
 indicatif = {version = "0.16.0", features = ["rayon"]}
 memmap = "0.7.0"
 neo4rs = { git = "https://github.com/Nuckal777/neo4rs" }
