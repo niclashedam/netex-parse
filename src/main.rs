@@ -1,4 +1,7 @@
+use std::io::Write;
+
 use indicatif::ParallelProgressIterator;
+use neo4rs::types::node;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use zip::ZipArchive;
 
@@ -16,7 +19,7 @@ fn main() {
     let archive = ZipArchive::new(zip_cursor).expect("failed to read zip");
     let documents: Vec<String> = archive
         .file_names()
-        .filter(|name| name.contains("DBDB_80"))
+        .filter(|name| name.contains("DBDB"))
         .map(str::to_owned)
         .collect();
     parse(&zip_memmap, "DBDB", &documents);
@@ -40,6 +43,7 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
             accum.extend(item);
             accum
         });
+    drop(archive);
     println!("deduping...");
     let graph = graph::Graph::from_data(&data);
     let route_count: usize = data.iter().map(|d| d.service_journeys.len()).sum();
@@ -50,12 +54,43 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
         graph.edges.len(),
         route_count,
     );
-    neo4j::push_graph_sync(
-        &graph,
-        neo4j::ConnectionParameters {
-            uri: "localhost:7687".to_owned(),
-            user: "".to_owned(),
-            password: "".to_owned(),
-        },
-    ).unwrap();
+    drop(data);
+    // neo4j::push_graph_sync(
+    //     &graph,
+    //     neo4j::ConnectionParameters {
+    //         uri: "localhost:7687".to_owned(),
+    //         user: "".to_owned(),
+    //         password: "".to_owned(),
+    //     },
+    // ).unwrap();
+    dump_csv(&graph).expect("failed to dump csv");
+}
+
+fn dump_csv(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true);
+    let mut node_writer = std::io::BufWriter::new(opts.open("./nodes.csv")?);
+    for node in &graph.nodes {
+        node_writer
+            .write(format!("\"{}\",{},{}\n", node.short_name, node.long, node.lat).as_bytes())?;
+    }
+    node_writer.flush()?;
+
+    let mut edge_writer = std::io::BufWriter::new(opts.open("./edges.csv")?);
+    for edge in &graph.edges {
+        let timetable = serde_json::to_string(&edge.timetable)
+            .expect("failed to serialize json")
+            .replace('"', "\\\"");
+        edge_writer.write(
+            format!(
+                "\"{}\",\"{}\",\"{}\"\n",
+                graph.nodes[edge.start_node].short_name,
+                graph.nodes[edge.end_node].short_name,
+                timetable
+            )
+            .as_bytes(),
+        )?;
+    }
+    edge_writer.flush()?;
+    Ok(())
 }

@@ -114,9 +114,9 @@ impl NetexData {
         };
         for child in node.descendants() {
             match child.tag_name().name() {
-                "ShortName" => result.short_name = child.text().unwrap_or_default().to_owned(),
-                "Longitude" => result.long = child.text().unwrap_or_default().parse()?,
-                "Latitude" => result.lat = child.text().unwrap_or_default().parse()?,
+                "ShortName" => result.short_name = child.text().unwrap_or_default().replace('"', ""),
+                "Longitude" => result.long = child.text().unwrap_or_default().parse::<f32>()?.clamp(-180.0, 180.0),
+                "Latitude" => result.lat = child.text().unwrap_or_default().parse::<f32>()?.clamp(-90.0, 90.0),
                 _ => {}
             }
         }
