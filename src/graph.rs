@@ -1,4 +1,4 @@
-use crate::parser::{NetexData, UicOperatingPeriod};
+use crate::parser::{Authority, Line, NetexData, UicOperatingPeriod};
 
 #[derive(Clone, Default, Debug)]
 pub struct Node {
@@ -17,6 +17,10 @@ pub struct Journey {
     pub transport_mode: String,
     #[serde(rename(serialize = "o"))]
     pub operating_period: usize,
+    #[serde(rename(serialize = "l"))]
+    pub line: String,
+    #[serde(rename(serialize = "c"))]
+    pub controller: String,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -91,12 +95,33 @@ impl Graph {
 
         let mut point_in_journey_to_stop_ref = std::collections::HashMap::<String, String>::new();
         for one_data in data {
-            for sequence in &one_data.points_in_squence {
+            for sequence in &one_data.service_journey_patterns {
                 for stop in &sequence.stops {
                     point_in_journey_to_stop_ref
                         .entry(stop.id.clone())
                         .or_insert(stop.scheduled_stop_point.clone());
                 }
+            }
+        }
+
+        let mut lines = std::collections::HashMap::<String, Line>::new();
+        for one_data in data {
+            for line in &one_data.lines {
+                lines.insert(line.id.clone(), line.clone());
+            }
+        }
+
+        let mut authorities = std::collections::HashMap::<String, Authority>::new();
+        for one_data in data {
+            for authority in &one_data.authorities {
+                authorities.insert(authority.id.clone(), authority.clone());
+            }
+        }
+
+        let mut pattern_ref_to_line = std::collections::HashMap::<String, String>::new();
+        for one_data in data {
+            for journey_pattern in &one_data.service_journey_patterns {
+                pattern_ref_to_line.insert(journey_pattern.id.clone(), journey_pattern.line.clone());
             }
         }
 
@@ -122,7 +147,11 @@ impl Graph {
                         .operating_period
                         .clone();
                     let period_entry = periods.entry((start_node, end_node)).or_default();
-                    let mut period_idx = period_entry.iter().enumerate().find(|(_, p)| p.id == period).map(|(idx, _)| idx);
+                    let mut period_idx = period_entry
+                        .iter()
+                        .enumerate()
+                        .find(|(_, p)| p.id == period)
+                        .map(|(idx, _)| idx);
                     if period_idx.is_none() {
                         period_idx = Some(period_entry.len());
                         let op = one_data
@@ -132,17 +161,20 @@ impl Graph {
                             .expect("undefined operating period");
                         period_entry.push(op.clone());
                     }
-                    
+
                     let entry = edges.entry((start_node, end_node)).or_insert(Edge {
                         start_node: start_node,
                         end_node: end_node,
                         timetable: Timetable::default(),
                     });
+                    let line = &lines[&pattern_ref_to_line[&journey.pattern_ref]];
                     entry.timetable.journeys.push(Journey {
                         departure: pre.departure,
                         arrival: current.arrival,
                         transport_mode: journey.transport_mode.clone(),
                         operating_period: period_idx.unwrap(),
+                        line: line.short_name.clone(),
+                        controller: authorities[&line.authority].short_name.clone(),
                     });
                 }
             }

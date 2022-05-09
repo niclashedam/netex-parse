@@ -1,7 +1,6 @@
 use std::io::Write;
 
 use indicatif::ParallelProgressIterator;
-use neo4rs::types::node;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use zip::ZipArchive;
 
@@ -47,12 +46,14 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
     println!("deduping...");
     let graph = graph::Graph::from_data(&data);
     let route_count: usize = data.iter().map(|d| d.service_journeys.len()).sum();
+    let line_count: usize = data.iter().map(|d| d.lines.len()).sum();
     println!(
-        "{} has {} deduped nodes and {} deduped edges and {} timetabled routes.",
+        "{} has {} deduped nodes and {} deduped edges and {} timetabled routes and {} lines.",
         key,
         graph.nodes.len(),
         graph.edges.len(),
         route_count,
+        line_count,
     );
     drop(data);
     // neo4j::push_graph_sync(

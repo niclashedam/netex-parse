@@ -1,3 +1,16 @@
+#[derive(Clone, Default)]
+pub struct Authority {
+    pub id: String,
+    pub short_name: String,
+}
+
+#[derive(Clone, Default)]
+pub struct Line {
+    pub id: String,
+    pub short_name: String,
+    pub authority: String,
+}
+
 #[derive(Default)]
 pub struct DayTypeAssignment {
     pub operating_period: String,
@@ -28,9 +41,10 @@ pub struct StopPointInJourneyPattern {
 }
 
 #[derive(Default)]
-pub struct PointsInSequence {
-    /// refs for scheduled point stops
+pub struct ServiceJourneyPattern {
     pub stops: Vec<StopPointInJourneyPattern>,
+    pub line: String,
+    pub id: String,
 }
 
 #[derive(Default)]
@@ -45,15 +59,18 @@ pub struct ServiceJourney {
     pub passing_times: Vec<TimetabledPassingTime>,
     pub day_type: String,
     pub transport_mode: String,
+    pub pattern_ref: String,
 }
 
 #[derive(Default)]
 pub struct NetexData {
     pub scheduled_stop_points: Vec<ScheduledStopPoint>,
-    pub points_in_squence: Vec<PointsInSequence>,
+    pub service_journey_patterns: Vec<ServiceJourneyPattern>,
     pub service_journeys: Vec<ServiceJourney>,
     pub operating_periods: Vec<UicOperatingPeriod>,
     pub day_type_assignments: Vec<DayTypeAssignment>,
+    pub lines: Vec<Line>,
+    pub authorities: Vec<Authority>,
 }
 
 impl NetexData {
@@ -74,12 +91,12 @@ impl NetexData {
             .collect();
         data.scheduled_stop_points = nodes?;
 
-        let points: Vec<PointsInSequence> = document
+        let points: Vec<ServiceJourneyPattern> = document
             .descendants()
-            .filter(|node| node.tag_name().name() == "pointsInSequence")
-            .map(|node| NetexData::parse_points_in_sequence(&node))
+            .filter(|node| node.tag_name().name() == "ServiceJourneyPattern")
+            .map(|node| NetexData::parse_service_journey_pattern(&node))
             .collect();
-        data.points_in_squence = points;
+        data.service_journey_patterns = points;
 
         let journeys: Vec<ServiceJourney> = document
             .descendants()
@@ -102,6 +119,20 @@ impl NetexData {
                 .map(|node| NetexData::parse_day_type_assignment(&node))
                 .collect();
         data.day_type_assignments = day_type_assignments?;
+
+        let lines: Result<Vec<Line>, Box<dyn std::error::Error>> = document
+            .descendants()
+            .filter(|node| node.tag_name().name() == "Line")
+            .map(|node| NetexData::parse_line(&node))
+            .collect();
+        data.lines = lines?;
+
+        let authorities: Vec<Authority> = document
+            .descendants()
+            .filter(|node| node.tag_name().name() == "Authority")
+            .map(|node| NetexData::parse_authority(&node))
+            .collect();
+        data.authorities = authorities;
         Ok(data)
     }
 
@@ -114,18 +145,38 @@ impl NetexData {
         };
         for child in node.descendants() {
             match child.tag_name().name() {
-                "ShortName" => result.short_name = child.text().unwrap_or_default().replace('"', ""),
-                "Longitude" => result.long = child.text().unwrap_or_default().parse::<f32>()?.clamp(-180.0, 180.0),
-                "Latitude" => result.lat = child.text().unwrap_or_default().parse::<f32>()?.clamp(-90.0, 90.0),
+                "ShortName" => {
+                    result.short_name = child.text().unwrap_or_default().replace('"', "")
+                }
+                "Longitude" => {
+                    result.long = child
+                        .text()
+                        .unwrap_or_default()
+                        .parse::<f32>()?
+                        .clamp(-180.0, 180.0)
+                }
+                "Latitude" => {
+                    result.lat = child
+                        .text()
+                        .unwrap_or_default()
+                        .parse::<f32>()?
+                        .clamp(-90.0, 90.0)
+                }
                 _ => {}
             }
         }
         Ok(result)
     }
 
-    fn parse_points_in_sequence(node: &roxmltree::Node) -> PointsInSequence {
-        let mut result = PointsInSequence::default();
+    fn parse_service_journey_pattern(node: &roxmltree::Node) -> ServiceJourneyPattern {
+        let mut result = ServiceJourneyPattern{
+            id: node.attribute("id").unwrap_or_default().to_owned(),
+            ..ServiceJourneyPattern::default()
+        };
         for sub_node in node.descendants() {
+            if sub_node.tag_name().name() == "LineRef" {
+                result.line = sub_node.attribute("ref").unwrap_or_default().to_owned();
+            }
             if sub_node.tag_name().name() != "StopPointInJourneyPattern" {
                 continue;
             }
@@ -156,9 +207,16 @@ impl NetexData {
             .unwrap()
             .text()
             .unwrap_or_default();
+        let pattern_ref = node
+            .descendants()
+            .find(|node| node.tag_name().name() == "ServiceJourneyPatternRef")
+            .unwrap()
+            .attribute("ref")
+            .unwrap_or_default();
         let mut result = ServiceJourney {
             day_type: day_type.to_owned(),
             transport_mode: transport_mode.to_owned(),
+            pattern_ref: pattern_ref.to_owned(),
             ..ServiceJourney::default()
         };
         let passing_times_node = node
@@ -231,6 +289,41 @@ impl NetexData {
             }
         }
         return Ok(assignment);
+    }
+
+    fn parse_line(node: &roxmltree::Node) -> Result<Line, Box<dyn std::error::Error>> {
+        let mut result = Line {
+            id: node.attribute("id").unwrap_or_default().to_owned(),
+            ..Line::default()
+        };
+        for child in node.descendants() {
+            match child.tag_name().name() {
+                "ShortName" => {
+                    result.short_name = child.text().unwrap_or_default().to_owned();
+                }
+                "AuthorityRef" => {
+                    result.authority = child.attribute("ref").unwrap_or_default().to_owned();
+                }
+                _ => {}
+            }
+        }
+        Ok(result)
+    }
+
+    fn parse_authority(node: &roxmltree::Node) -> Authority {
+        let mut result = Authority {
+            id: node.attribute("id").unwrap_or_default().to_owned(),
+            ..Authority::default()
+        };
+        for child in node.descendants() {
+            match child.tag_name().name() {
+                "ShortName" => {
+                    result.short_name = child.text().unwrap_or_default().to_owned();
+                }
+                _ => {}
+            }
+        }
+        result
     }
 
     // In netex departure and arrival time are reqpresented as hh:mm:ss
