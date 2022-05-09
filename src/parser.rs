@@ -1,26 +1,28 @@
+use xxhash_rust::xxh3::xxh3_64;
+
 #[derive(Clone, Default)]
 pub struct Authority {
-    pub id: String,
+    pub id: u64,
     pub short_name: String,
 }
 
 #[derive(Clone, Default)]
 pub struct Line {
-    pub id: String,
+    pub id: u64,
     pub short_name: String,
-    pub authority: String,
+    pub authority: u64,
 }
 
 #[derive(Default)]
 pub struct DayTypeAssignment {
-    pub operating_period: String,
-    pub day_type: String,
+    pub operating_period: u64,
+    pub day_type: u64,
     pub is_available: bool,
 }
 
 #[derive(Clone, Default)]
 pub struct UicOperatingPeriod {
-    pub id: String,
+    pub id: u64,
     pub from: u32,
     pub to: u32,
     pub valid_day_bits: Vec<u8>,
@@ -28,7 +30,7 @@ pub struct UicOperatingPeriod {
 
 #[derive(Default)]
 pub struct ScheduledStopPoint {
-    pub id: String,
+    pub id: u64,
     pub short_name: String,
     pub long: f32,
     pub lat: f32,
@@ -36,20 +38,20 @@ pub struct ScheduledStopPoint {
 
 #[derive(Default)]
 pub struct StopPointInJourneyPattern {
-    pub id: String,
-    pub scheduled_stop_point: String,
+    pub id: u64,
+    pub scheduled_stop_point: u64,
 }
 
 #[derive(Default)]
 pub struct ServiceJourneyPattern {
     pub stops: Vec<StopPointInJourneyPattern>,
-    pub line: String,
-    pub id: String,
+    pub line: u64,
+    pub id: u64,
 }
 
 #[derive(Default)]
 pub struct TimetabledPassingTime {
-    pub stop_point_in_journey_pattern: String,
+    pub stop_point_in_journey_pattern: u64,
     pub arrival: u16,
     pub departure: u16,
 }
@@ -57,9 +59,9 @@ pub struct TimetabledPassingTime {
 #[derive(Default)]
 pub struct ServiceJourney {
     pub passing_times: Vec<TimetabledPassingTime>,
-    pub day_type: String,
+    pub day_type: u64,
     pub transport_mode: String,
-    pub pattern_ref: String,
+    pub pattern_ref: u64,
 }
 
 #[derive(Default)]
@@ -140,7 +142,7 @@ impl NetexData {
         node: &roxmltree::Node,
     ) -> Result<ScheduledStopPoint, Box<dyn std::error::Error>> {
         let mut result = ScheduledStopPoint {
-            id: node.attribute("id").unwrap_or_default().to_owned(),
+            id: xxh3_64(node.attribute("id").unwrap_or_default().as_bytes()),
             ..ScheduledStopPoint::default()
         };
         for child in node.descendants() {
@@ -169,26 +171,28 @@ impl NetexData {
     }
 
     fn parse_service_journey_pattern(node: &roxmltree::Node) -> ServiceJourneyPattern {
-        let mut result = ServiceJourneyPattern{
-            id: node.attribute("id").unwrap_or_default().to_owned(),
+        let mut result = ServiceJourneyPattern {
+            id: xxh3_64(node.attribute("id").unwrap_or_default().as_bytes()),
             ..ServiceJourneyPattern::default()
         };
         for sub_node in node.descendants() {
             if sub_node.tag_name().name() == "LineRef" {
-                result.line = sub_node.attribute("ref").unwrap_or_default().to_owned();
+                result.line = xxh3_64(sub_node.attribute("ref").unwrap_or_default().as_bytes());
             }
             if sub_node.tag_name().name() != "StopPointInJourneyPattern" {
                 continue;
             }
             let mut stop = StopPointInJourneyPattern {
-                id: sub_node.attribute("id").unwrap_or_default().to_owned(),
+                id: xxh3_64(sub_node.attribute("id").unwrap_or_default().as_bytes()),
                 ..StopPointInJourneyPattern::default()
             };
-            stop.scheduled_stop_point = sub_node
-                .descendants()
-                .find(|child| child.tag_name().name() == "ScheduledStopPointRef")
-                .map(|node| node.attribute("ref").unwrap_or_default().to_owned())
-                .unwrap_or_default();
+            stop.scheduled_stop_point = xxh3_64(
+                sub_node
+                    .descendants()
+                    .find(|child| child.tag_name().name() == "ScheduledStopPointRef")
+                    .map(|node| node.attribute("ref").unwrap_or_default().as_bytes())
+                    .unwrap_or_default(),
+            );
             result.stops.push(stop);
         }
         result
@@ -214,9 +218,9 @@ impl NetexData {
             .attribute("ref")
             .unwrap_or_default();
         let mut result = ServiceJourney {
-            day_type: day_type.to_owned(),
+            day_type: xxh3_64(day_type.as_bytes()),
             transport_mode: transport_mode.to_owned(),
-            pattern_ref: pattern_ref.to_owned(),
+            pattern_ref: xxh3_64(pattern_ref.as_bytes()),
             ..ServiceJourney::default()
         };
         let passing_times_node = node
@@ -232,7 +236,7 @@ impl NetexData {
                 match child.tag_name().name() {
                     "StopPointInJourneyPatternRef" => {
                         timetabled_passing_time.stop_point_in_journey_pattern =
-                            child.attribute("ref").unwrap_or_default().to_owned();
+                            xxh3_64(child.attribute("ref").unwrap_or_default().as_bytes());
                     }
                     "ArrivalTime" => {
                         timetabled_passing_time.arrival =
@@ -252,7 +256,7 @@ impl NetexData {
 
     fn parse_operating_period(node: &roxmltree::Node) -> UicOperatingPeriod {
         let mut result = UicOperatingPeriod {
-            id: node.attribute("id").unwrap_or_default().to_owned(),
+            id: xxh3_64(node.attribute("id").unwrap_or_default().as_bytes()),
             ..UicOperatingPeriod::default()
         };
         for child in node.descendants() {
@@ -277,10 +281,10 @@ impl NetexData {
             match child.tag_name().name() {
                 "OperatingPeriodRef" => {
                     assignment.operating_period =
-                        child.attribute("ref").unwrap_or_default().to_owned()
+                        xxh3_64(child.attribute("ref").unwrap_or_default().as_bytes())
                 }
                 "DayTypeRef" => {
-                    assignment.day_type = child.attribute("ref").unwrap_or_default().to_owned()
+                    assignment.day_type = xxh3_64(child.attribute("ref").unwrap_or_default().as_bytes())
                 }
                 "isAvailable" => {
                     assignment.is_available = child.text().unwrap_or_default().parse()?
@@ -293,7 +297,7 @@ impl NetexData {
 
     fn parse_line(node: &roxmltree::Node) -> Result<Line, Box<dyn std::error::Error>> {
         let mut result = Line {
-            id: node.attribute("id").unwrap_or_default().to_owned(),
+            id: xxh3_64(node.attribute("id").unwrap_or_default().as_bytes()),
             ..Line::default()
         };
         for child in node.descendants() {
@@ -302,7 +306,7 @@ impl NetexData {
                     result.short_name = child.text().unwrap_or_default().to_owned();
                 }
                 "AuthorityRef" => {
-                    result.authority = child.attribute("ref").unwrap_or_default().to_owned();
+                    result.authority = xxh3_64(child.attribute("ref").unwrap_or_default().as_bytes());
                 }
                 _ => {}
             }
@@ -312,7 +316,7 @@ impl NetexData {
 
     fn parse_authority(node: &roxmltree::Node) -> Authority {
         let mut result = Authority {
-            id: node.attribute("id").unwrap_or_default().to_owned(),
+            id: xxh3_64(node.attribute("id").unwrap_or_default().as_bytes()),
             ..Authority::default()
         };
         for child in node.descendants() {

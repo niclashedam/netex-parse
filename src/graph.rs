@@ -65,12 +65,12 @@ impl Graph {
     pub fn from_data(data: &[NetexData]) -> Graph {
         // short name to scheduled point stop index
         let mut node_map = std::collections::HashMap::<String, Indices>::new();
-        let mut ref_to_node_idx = std::collections::HashMap::<String, Indices>::new();
+        let mut ref_to_node_idx = std::collections::HashMap::<u64, Indices>::new();
         let mut counter = 0_usize;
         for (data_idx, one_data) in data.iter().enumerate() {
             for (stop_idx, stop) in one_data.scheduled_stop_points.iter().enumerate() {
                 if node_map.contains_key(&stop.short_name) {
-                    ref_to_node_idx.insert(stop.id.clone(), node_map[&stop.short_name]);
+                    ref_to_node_idx.insert(stop.id, node_map[&stop.short_name]);
                 } else {
                     let indices = Indices {
                         data: data_idx,
@@ -78,7 +78,7 @@ impl Graph {
                         stop: stop_idx,
                     };
                     node_map.insert(stop.short_name.clone(), indices);
-                    ref_to_node_idx.insert(stop.id.clone(), indices);
+                    ref_to_node_idx.insert(stop.id, indices);
                     counter += 1;
                 }
             }
@@ -93,35 +93,35 @@ impl Graph {
             };
         }
 
-        let mut point_in_journey_to_stop_ref = std::collections::HashMap::<String, String>::new();
+        let mut point_in_journey_to_stop_ref = std::collections::HashMap::<u64, u64>::new();
         for one_data in data {
             for sequence in &one_data.service_journey_patterns {
                 for stop in &sequence.stops {
                     point_in_journey_to_stop_ref
-                        .entry(stop.id.clone())
-                        .or_insert(stop.scheduled_stop_point.clone());
+                        .entry(stop.id)
+                        .or_insert(stop.scheduled_stop_point);
                 }
             }
         }
 
-        let mut lines = std::collections::HashMap::<String, Line>::new();
+        let mut lines = std::collections::HashMap::<u64, Line>::new();
         for one_data in data {
             for line in &one_data.lines {
-                lines.insert(line.id.clone(), line.clone());
+                lines.insert(line.id, line.clone());
             }
         }
 
-        let mut authorities = std::collections::HashMap::<String, Authority>::new();
+        let mut authorities = std::collections::HashMap::<u64, Authority>::new();
         for one_data in data {
             for authority in &one_data.authorities {
-                authorities.insert(authority.id.clone(), authority.clone());
+                authorities.insert(authority.id, authority.clone());
             }
         }
 
-        let mut pattern_ref_to_line = std::collections::HashMap::<String, String>::new();
+        let mut pattern_ref_to_line = std::collections::HashMap::<u64, u64>::new();
         for one_data in data {
             for journey_pattern in &one_data.service_journey_patterns {
-                pattern_ref_to_line.insert(journey_pattern.id.clone(), journey_pattern.line.clone());
+                pattern_ref_to_line.insert(journey_pattern.id, journey_pattern.line);
             }
         }
 
