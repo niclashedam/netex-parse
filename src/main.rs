@@ -11,14 +11,13 @@ mod neo4j;
 mod parser;
 
 fn main() {
-    let zip_stream = std::fs::File::open("20220328_fahrplaene_gesamtdeutschland.zip")
+    let zip_stream = std::fs::File::open("20220725_fahrplaene_gesamtdeutschland.zip")
         .expect("failed to open data");
     let zip_memmap = unsafe { memmap::Mmap::map(&zip_stream).expect("failed mmap") };
     let zip_cursor = std::io::Cursor::new(&zip_memmap);
     let archive = ZipArchive::new(zip_cursor).expect("failed to read zip");
     let documents: Vec<String> = archive
         .file_names()
-        .filter(|name| name.contains("DBDB"))
         .map(str::to_owned)
         .collect();
     parse(&zip_memmap, "DBDB", &documents);
@@ -56,14 +55,6 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
         line_count,
     );
     drop(data);
-    // neo4j::push_graph_sync(
-    //     &graph,
-    //     neo4j::ConnectionParameters {
-    //         uri: "localhost:7687".to_owned(),
-    //         user: "".to_owned(),
-    //         password: "".to_owned(),
-    //     },
-    // ).unwrap();
     dump_csv(&graph).expect("failed to dump csv");
 }
 

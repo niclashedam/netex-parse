@@ -13,7 +13,7 @@ pub struct Line {
     pub authority: u64,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DayTypeAssignment {
     pub operating_period: u64,
     pub day_type: u64,
@@ -147,7 +147,7 @@ impl NetexData {
         };
         for child in node.descendants() {
             match child.tag_name().name() {
-                "ShortName" => {
+                "ShortName" | "Name" => {
                     result.short_name = child.text().unwrap_or_default().replace('"', "")
                 }
                 "Longitude" => {

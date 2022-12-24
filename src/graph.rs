@@ -1,4 +1,9 @@
-use crate::parser::{Authority, Line, NetexData, UicOperatingPeriod};
+use std::collections::HashMap;
+
+use indicatif::ParallelProgressIterator;
+use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
+
+use crate::parser::{Authority, DayTypeAssignment, Line, NetexData, UicOperatingPeriod};
 
 #[derive(Clone, Default, Debug)]
 pub struct Node {
@@ -23,7 +28,7 @@ pub struct Journey {
     pub controller: String,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Clone, Default, Debug, serde::Serialize)]
 pub struct OperatingPeriod {
     #[serde(rename(serialize = "f"))]
     pub from: u32,
@@ -92,6 +97,8 @@ impl Graph {
                 lat: current.lat,
             };
         }
+        // nodes contains stops deduplicated by short name
+        // ref_to_node_idx maps a nextex stop ref to a index into nodes
 
         let mut point_in_journey_to_stop_ref = std::collections::HashMap::<u64, u64>::new();
         for one_data in data {
@@ -124,12 +131,26 @@ impl Graph {
                 pattern_ref_to_line.insert(journey_pattern.id, journey_pattern.line);
             }
         }
+        
+        let mut period_map = std::collections::HashMap::<u64, usize>::new();
+        for (idx, period) in data
+            .iter()
+            .flat_map(|d| d.operating_periods.iter())
+            .enumerate()
+        {
+            period_map.insert(period.id, idx);
+        }
+        let mut day_type_assignments = HashMap::<u64, DayTypeAssignment>::new();
+        for dta in data.iter().flat_map(|d| d.day_type_assignments.iter()) {
+            day_type_assignments.insert(dta.day_type, dta.clone());
+        }
 
-        let mut edges = std::collections::HashMap::<(usize, usize), Edge>::new();
-        let mut periods =
-            std::collections::HashMap::<(usize, usize), Vec<UicOperatingPeriod>>::new();
-        for one_data in data {
-            for journey in &one_data.service_journeys {
+        let mut edges = data
+            .par_iter()
+            .progress()
+            .flat_map(|d| d.service_journeys.par_iter())
+            .map(|journey| {
+                let mut local_edges = std::collections::HashMap::<(usize, usize), Edge>::new();
                 for window in journey.passing_times.windows(2) {
                     let pre = &window[0];
                     let current = &window[1];
@@ -139,30 +160,12 @@ impl Graph {
                     let end_node = ref_to_node_idx
                         [&point_in_journey_to_stop_ref[&current.stop_point_in_journey_pattern]]
                         .node;
-                    let period = one_data
-                        .day_type_assignments
-                        .iter()
-                        .find(|da| da.day_type == journey.day_type)
+                    let period = day_type_assignments
+                        .get(&journey.day_type)
                         .expect("Day type without operating period found")
-                        .operating_period
-                        .clone();
-                    let period_entry = periods.entry((start_node, end_node)).or_default();
-                    let mut period_idx = period_entry
-                        .iter()
-                        .enumerate()
-                        .find(|(_, p)| p.id == period)
-                        .map(|(idx, _)| idx);
-                    if period_idx.is_none() {
-                        period_idx = Some(period_entry.len());
-                        let op = one_data
-                            .operating_periods
-                            .iter()
-                            .find(|p| p.id == period)
-                            .expect("undefined operating period");
-                        period_entry.push(op.clone());
-                    }
+                        .operating_period;
 
-                    let entry = edges.entry((start_node, end_node)).or_insert(Edge {
+                    let entry = local_edges.entry((start_node, end_node)).or_insert(Edge {
                         start_node: start_node,
                         end_node: end_node,
                         timetable: Timetable::default(),
@@ -172,31 +175,76 @@ impl Graph {
                         departure: pre.departure,
                         arrival: current.arrival,
                         transport_mode: journey.transport_mode.clone(),
-                        operating_period: period_idx.unwrap(),
+                        operating_period: *period_map.get(&period).unwrap(),
                         line: line.short_name.clone(),
                         controller: authorities[&line.authority].short_name.clone(),
                     });
                 }
-            }
-        }
+                local_edges
+            })
+            .reduce(
+                std::collections::HashMap::<(usize, usize), Edge>::new,
+                |a, mut b| {
+                    for (key, value) in a.into_iter() {
+                        let entry = b.entry(key).or_insert(Edge {
+                            start_node: key.0,
+                            end_node: key.1,
+                            timetable: Timetable::default(),
+                        });
+                        entry
+                            .timetable
+                            .journeys
+                            .extend(value.timetable.journeys.into_iter());
+                    }
+                    b
+                },
+            );
 
-        for (nodes, ops) in periods.into_iter() {
-            edges
-                .get_mut(&nodes)
-                .expect("unknown edge")
-                .timetable
-                .periods = ops
-                .into_iter()
-                .map(|op| OperatingPeriod {
-                    from: op.from,
-                    to: op.to,
-                    valid_day_bits: base64::encode(op.valid_day_bits),
-                })
-                .collect();
-        }
+        edges.par_iter_mut().for_each(|(_, edge)| {
+            let mut global_to_local = HashMap::<usize, usize>::new();
+            let mut counter = 0;
+            for journey in &edge.timetable.journeys {
+                if global_to_local.contains_key(&journey.operating_period) {
+                    continue;
+                }
+                global_to_local.insert(journey.operating_period, counter);
+                counter += 1;
+            }
+            let mut local_ops = vec![OperatingPeriod::default(); global_to_local.len()];
+            for (global, local) in &global_to_local {
+                let uic_op = Self::lookup_operating_period(data, *global).expect(
+                    "failed to map global operating period index to concrete operating period",
+                );
+                local_ops[*local] = OperatingPeriod {
+                    from: uic_op.from,
+                    to: uic_op.to,
+                    valid_day_bits: base64::encode(&uic_op.valid_day_bits),
+                }
+            }
+            for journey in &mut edge.timetable.journeys {
+                journey.operating_period = *global_to_local
+                    .get(&journey.operating_period)
+                    .expect("failed to map global to local operating period");
+            }
+            edge.timetable.periods = local_ops;
+        });
+
         Graph {
             nodes,
             edges: edges.into_iter().map(|(_, e)| e).collect(),
         }
+    }
+
+    fn lookup_operating_period(
+        data: &[NetexData],
+        mut global_index: usize,
+    ) -> Option<&UicOperatingPeriod> {
+        for one_data in data {
+            if global_index < one_data.operating_periods.len() {
+                return Some(&one_data.operating_periods[global_index]);
+            }
+            global_index -= one_data.operating_periods.len()
+        }
+        None
     }
 }
