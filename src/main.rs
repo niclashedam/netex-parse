@@ -20,13 +20,14 @@ fn main() {
         .file_names()
         .map(str::to_owned)
         .collect();
-    parse(&zip_memmap, "DBDB", &documents);
+    parse(&zip_memmap, "DBDB_80", &documents);
 }
 
 fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
     let data = documents
         .par_iter()
         .progress_count(documents.len() as u64)
+        .filter(|doc| doc.contains(key))
         .map(|doc| {
             let zip_cursor = std::io::Cursor::new(archive);
             let mut archive = ZipArchive::new(zip_cursor).expect("failed to read zip");
@@ -41,7 +42,6 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
             accum.extend(item);
             accum
         });
-    drop(archive);
     println!("deduping...");
     let graph = graph::Graph::from_data(&data);
     let route_count: usize = data.iter().map(|d| d.service_journeys.len()).sum();
@@ -55,7 +55,8 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
         line_count,
     );
     drop(data);
-    dump_csv(&graph).expect("failed to dump csv");
+    // dump_csv(&graph).expect("failed to dump csv");
+    dump_binary(&graph).expect("failed to dump binary")
 }
 
 fn dump_csv(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
@@ -64,7 +65,7 @@ fn dump_csv(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
     let mut node_writer = std::io::BufWriter::new(opts.open("./nodes.csv")?);
     for node in &graph.nodes {
         node_writer
-            .write(format!("\"{}\",{},{}\n", node.short_name, node.long, node.lat).as_bytes())?;
+            .write_all(format!("\"{}\",{},{}\n", node.short_name, node.long, node.lat).as_bytes())?;
     }
     node_writer.flush()?;
 
@@ -73,7 +74,7 @@ fn dump_csv(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
         let timetable = serde_json::to_string(&edge.timetable)
             .expect("failed to serialize json")
             .replace('"', "\\\"");
-        edge_writer.write(
+        edge_writer.write_all(
             format!(
                 "\"{}\",\"{}\",\"{}\"\n",
                 graph.nodes[edge.start_node].short_name,
@@ -84,5 +85,75 @@ fn dump_csv(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
     edge_writer.flush()?;
+    Ok(())
+}
+
+fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
+
+    fn node_as_bytes(node: &graph::Node) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        // id is implicit
+        let mut data = Vec::<u8>::new();
+        let mut writer = std::io::Cursor::new(&mut data);
+        writer.write_all(&node.lat.to_le_bytes())?;
+        writer.write_all(&node.long.to_le_bytes())?;
+        let name_bytes = node.short_name.as_bytes();
+        writer.write_all(&(name_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(name_bytes)?;
+        Ok(data)
+    }
+
+    fn period_as_bytes(period: &graph::OperatingPeriod)  -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let mut data = Vec::<u8>::new();
+        let mut writer = std::io::Cursor::new(&mut data);
+        writer.write_all(&period.from.to_le_bytes())?;
+        writer.write_all(&period.to.to_le_bytes())?;
+        writer.write_all(&(period.valid_day.len() as u32).to_le_bytes())?;
+        writer.write_all(&period.valid_day)?;
+        Ok(data)
+    }
+
+    fn edge_as_bytes(edge: &graph::Edge) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let mut data = Vec::<u8>::new();
+        let mut writer = std::io::Cursor::new(&mut data);
+        writer.write_all(&(edge.start_node as u32).to_le_bytes())?;
+        writer.write_all(&(edge.end_node as u32).to_le_bytes())?;
+        let journeys = &edge.timetable.journeys;
+        // arrival, departure, operating period -> 3x u16
+        writer.write_all(&((journeys.len() * 6) as u32).to_le_bytes())?;
+        for journey in journeys {
+            writer.write_all(&journey.arrival.to_le_bytes())?;
+            writer.write_all(&journey.departure.to_le_bytes())?;
+            writer.write_all(&(journey.operating_period as u16).to_le_bytes())?;
+        }
+        let mut periods = Vec::<u8>::new();
+        for period in &edge.timetable.periods {
+            periods.extend(period_as_bytes(period)?);
+        }
+        writer.write_all(&(periods.len() as u32).to_le_bytes())?;
+        writer.write_all(&periods)?;
+        Ok(data)
+    }
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true);
+    let mut writer = std::io::BufWriter::new(opts.open("./graph.bin")?);
+    // TODO: magic number, file version
+    // nodes with data
+    let mut node_data = Vec::<u8>::new();
+    let mut node_writer = std::io::Cursor::new(&mut node_data);
+    for node in &graph.nodes {
+        node_writer.write_all(&node_as_bytes(node)?)?;
+    }
+    writer.write_all(&(graph.nodes.len() as u32).to_le_bytes())?;
+    writer.write_all(&node_data)?;
+    // edges with data
+    let mut edge_data = Vec::<u8>::new();
+    let mut edge_writer = std::io::Cursor::new(&mut edge_data);
+    for edge in &graph.edges {
+        edge_writer.write_all(&edge_as_bytes(edge)?)?;
+    }
+    writer.write_all(&(graph.edges.len() as u32).to_le_bytes())?;
+    writer.write_all(&edge_data)?;
+    writer.flush()?;
     Ok(())
 }

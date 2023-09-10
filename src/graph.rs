@@ -36,6 +36,7 @@ pub struct OperatingPeriod {
     pub to: u32,
     #[serde(rename(serialize = "v"))]
     pub valid_day_bits: String,
+    pub valid_day: Vec<u8>,
 }
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -219,6 +220,7 @@ impl Graph {
                     from: uic_op.from,
                     to: uic_op.to,
                     valid_day_bits: base64::encode(&uic_op.valid_day_bits),
+                    valid_day: uic_op.valid_day_bits.clone(),
                 }
             }
             for journey in &mut edge.timetable.journeys {
