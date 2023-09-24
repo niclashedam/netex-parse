@@ -4,7 +4,7 @@ use indicatif::ParallelProgressIterator;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use zip::ZipArchive;
 
-use crate::parser::NetexData;
+use crate::{parser::NetexData, graph::WalkEdge};
 
 mod graph;
 mod neo4j;
@@ -24,10 +24,13 @@ fn main() {
 }
 
 fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
-    let data = documents
+    println!("loading walk data");
+    let walk_bytes = std::fs::read("walk.json").expect("failed to read walk data");
+    let walks: Vec<WalkEdge> = serde_json::from_slice(&walk_bytes).expect("failed to deserialize json");
+    let mut data = documents
         .par_iter()
         .progress_count(documents.len() as u64)
-        .filter(|doc| doc.contains(key))
+        // .filter(|doc| doc.contains(key))
         .map(|doc| {
             let zip_cursor = std::io::Cursor::new(archive);
             let mut archive = ZipArchive::new(zip_cursor).expect("failed to read zip");
@@ -43,7 +46,10 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
             accum
         });
     println!("deduping...");
-    let graph = graph::Graph::from_data(&data);
+    for d in &mut data {
+        d.scheduled_stop_points.retain(|stop| stop.long > 5.5 && stop.long < 15.5 && stop.lat > 47.0 && stop.lat < 55.5);
+    }
+    let graph = graph::Graph::from_data(&data, walks);
     let route_count: usize = data.iter().map(|d| d.service_journeys.len()).sum();
     let line_count: usize = data.iter().map(|d| d.lines.len()).sum();
     println!(
@@ -56,7 +62,7 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
     );
     drop(data);
     // dump_csv(&graph).expect("failed to dump csv");
-    dump_binary(&graph).expect("failed to dump binary")
+    dump_binary(&graph).expect("failed to dump binary");
 }
 
 fn dump_csv(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
@@ -117,6 +123,7 @@ fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
         let mut writer = std::io::Cursor::new(&mut data);
         writer.write_all(&(edge.start_node as u32).to_le_bytes())?;
         writer.write_all(&(edge.end_node as u32).to_le_bytes())?;
+        writer.write_all(&edge.walk_seconds.to_le_bytes())?;
         let journeys = &edge.timetable.journeys;
         // arrival, departure, operating period -> 3x u16
         writer.write_all(&((journeys.len() * 6) as u32).to_le_bytes())?;
