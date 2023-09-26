@@ -49,7 +49,7 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
     for d in &mut data {
         d.scheduled_stop_points.retain(|stop| stop.long > 5.5 && stop.long < 15.5 && stop.lat > 47.0 && stop.lat < 55.5);
     }
-    let graph = graph::Graph::from_data(&data, walks);
+    let graph = graph::Graph::from_data(&data, &walks);
     let route_count: usize = data.iter().map(|d| d.service_journeys.len()).sum();
     let line_count: usize = data.iter().map(|d| d.lines.len()).sum();
     println!(

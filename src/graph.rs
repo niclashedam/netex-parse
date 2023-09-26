@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use indicatif::ParallelProgressIterator;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 
-use crate::parser::{Authority, DayTypeAssignment, Line, NetexData, UicOperatingPeriod};
+use crate::parser::{
+    Authority, DayTypeAssignment, Line, NetexData, ServiceJourney, UicOperatingPeriod,
+};
 
 #[derive(Clone, Default, Debug)]
 pub struct Node {
@@ -75,9 +77,14 @@ pub struct WalkEdge {
     pub duration: f32,
 }
 
-impl Graph {
-    #[allow(clippy::too_many_lines)]
-    pub fn from_data(data: &[NetexData], walk_seconds: Vec<WalkEdge>) -> Graph {
+struct Nodes {
+    vec: Vec<Node>,
+    ref_map: HashMap<u64, Indices>,
+    name_map: HashMap<String, Indices>,
+}
+
+impl Nodes {
+    fn from_data(data: &[NetexData]) -> Nodes {
         // short name to scheduled point stop index
         let mut node_map = HashMap::<String, Indices>::new();
         let mut ref_to_node_idx = HashMap::<u64, Indices>::new();
@@ -107,9 +114,37 @@ impl Graph {
                 lat: current.lat,
             };
         }
-        // nodes contains stops deduplicated by short name
-        // ref_to_node_idx maps a nextex stop ref to a index into nodes
+        Nodes {
+            name_map: node_map,
+            ref_map: ref_to_node_idx,
+            vec: nodes,
+        }
+    }
 
+    fn get(&self, idx: usize) -> &Node {
+        &self.vec[idx]
+    }
+
+    fn index_by_name(&self, name: &str) -> Option<&Indices> {
+        self.name_map.get(name)
+    }
+
+    fn index_by_stop_ref(&self, stop_ref: u64) -> Option<&Indices> {
+        self.ref_map.get(&stop_ref)
+    }
+}
+
+pub struct JourneyTransformer {
+    authorities: HashMap<u64, Authority>,
+    day_type_assignments: HashMap<u64, DayTypeAssignment>,
+    lines: HashMap<u64, Line>,
+    pattern_ref_to_line_ref: HashMap<u64, u64>,
+    point_in_journey_to_stop_ref: HashMap<u64, u64>,
+    period_map: HashMap<u64, usize>,
+}
+
+impl JourneyTransformer {
+    fn from_data(data: &[NetexData]) -> JourneyTransformer {
         let mut point_in_journey_to_stop_ref = HashMap::<u64, u64>::new();
         for one_data in data {
             for sequence in &one_data.service_journey_patterns {
@@ -135,10 +170,10 @@ impl Graph {
             }
         }
 
-        let mut pattern_ref_to_line = HashMap::<u64, u64>::new();
+        let mut pattern_ref_to_line_ref = HashMap::<u64, u64>::new();
         for one_data in data {
             for journey_pattern in &one_data.service_journey_patterns {
-                pattern_ref_to_line.insert(journey_pattern.id, journey_pattern.line);
+                pattern_ref_to_line_ref.insert(journey_pattern.id, journey_pattern.line);
             }
         }
 
@@ -155,50 +190,70 @@ impl Graph {
             day_type_assignments.insert(dta.day_type, dta.clone());
         }
 
+        JourneyTransformer {
+            authorities,
+            day_type_assignments,
+            lines,
+            pattern_ref_to_line_ref,
+            point_in_journey_to_stop_ref,
+            period_map,
+        }
+    }
+
+    fn to_edges(&self, journey: &ServiceJourney, nodes: &Nodes) -> HashMap<(usize, usize), Edge> {
+        let mut local_edges = HashMap::<(usize, usize), Edge>::new();
+        for window in journey.passing_times.windows(2) {
+            let pre = &window[0];
+            let current = &window[1];
+            let Some(start_indecies) = nodes.index_by_stop_ref(
+                self.point_in_journey_to_stop_ref[&pre.stop_point_in_journey_pattern],
+            ) else {
+                continue;
+            };
+            let Some(end_indecies) = nodes.index_by_stop_ref(
+                self.point_in_journey_to_stop_ref[&current.stop_point_in_journey_pattern],
+            ) else {
+                continue;
+            };
+            let period = self
+                .day_type_assignments
+                .get(&journey.day_type)
+                .expect("Day type without operating period found")
+                .operating_period;
+
+            let entry = local_edges
+                .entry((start_indecies.node, end_indecies.node))
+                .or_insert(Edge {
+                    walk_seconds: u16::MAX,
+                    start_node: start_indecies.node,
+                    end_node: end_indecies.node,
+                    timetable: Timetable::default(),
+                });
+            let line = &self.lines[&self.pattern_ref_to_line_ref[&journey.pattern_ref]];
+            entry.timetable.journeys.push(Journey {
+                departure: pre.departure,
+                arrival: current.arrival,
+                transport_mode: journey.transport_mode.clone(),
+                operating_period: *self.period_map.get(&period).unwrap(),
+                line: line.short_name.clone(),
+                controller: self.authorities[&line.authority].short_name.clone(),
+            });
+        }
+        local_edges
+    }
+}
+
+impl Graph {
+    pub fn from_data(data: &[NetexData], walk_seconds: &[WalkEdge]) -> Graph {
+        // nodes contains stops deduplicated by short name
+        let nodes = Nodes::from_data(data);
+        let journey_transformer = JourneyTransformer::from_data(data);
+
         let mut edges = data
             .par_iter()
             .progress()
             .flat_map(|d| d.service_journeys.par_iter())
-            .map(|journey| {
-                let mut local_edges = HashMap::<(usize, usize), Edge>::new();
-                for window in journey.passing_times.windows(2) {
-                    let pre = &window[0];
-                    let current = &window[1];
-                    let Some(start_indecies) = ref_to_node_idx
-                        .get(&point_in_journey_to_stop_ref[&pre.stop_point_in_journey_pattern])
-                    else {
-                        continue;
-                    };
-                    let Some(end_indecies) = ref_to_node_idx
-                        .get(&point_in_journey_to_stop_ref[&current.stop_point_in_journey_pattern])
-                    else {
-                        continue;
-                    };
-                    let period = day_type_assignments
-                        .get(&journey.day_type)
-                        .expect("Day type without operating period found")
-                        .operating_period;
-
-                    let entry = local_edges
-                        .entry((start_indecies.node, end_indecies.node))
-                        .or_insert(Edge {
-                            walk_seconds: u16::MAX,
-                            start_node: start_indecies.node,
-                            end_node: end_indecies.node,
-                            timetable: Timetable::default(),
-                        });
-                    let line = &lines[&pattern_ref_to_line[&journey.pattern_ref]];
-                    entry.timetable.journeys.push(Journey {
-                        departure: pre.departure,
-                        arrival: current.arrival,
-                        transport_mode: journey.transport_mode.clone(),
-                        operating_period: *period_map.get(&period).unwrap(),
-                        line: line.short_name.clone(),
-                        controller: authorities[&line.authority].short_name.clone(),
-                    });
-                }
-                local_edges
-            })
+            .map(|journey| journey_transformer.to_edges(journey, &nodes))
             .reduce(HashMap::<(usize, usize), Edge>::new, |a, mut b| {
                 for (key, value) in a {
                     let entry = b.entry(key).or_insert(Edge {
@@ -217,33 +272,15 @@ impl Graph {
 
         // loop through walk seconds hashmap
         for walk_edge in walk_seconds {
-            let start_idx = node_map[&walk_edge.start].node;
-            let end_idx = node_map[&walk_edge.end].node;
-            let start_node = &nodes[start_idx];
-            let end_node = &nodes[end_idx];
-            let distance = great_circle_distance(
-                (start_node.long, start_node.lat),
-                (end_node.long, end_node.lat),
-            );
-            if distance > 1.0 {
-                continue;
-            }
-            let mut forward = edges.entry((start_idx, end_idx)).or_insert(Edge {
-                start_node: start_idx,
-                end_node: end_idx,
-                timetable: Timetable::default(),
-                walk_seconds: u16::MAX,
-            });
-            forward.walk_seconds = walk_edge.duration as u16;
-            let mut backward = edges.entry((end_idx, start_idx)).or_insert(Edge {
-                start_node: end_idx,
-                end_node: end_idx,
-                timetable: Timetable::default(),
-                walk_seconds: u16::MAX,
-            });
-            backward.walk_seconds = walk_edge.duration as u16;
+            Self::update_walk(walk_edge, &nodes, &mut edges);
         }
 
+        // filter non-sensical journeys
+        edges.par_iter_mut().for_each(|(_, edge)| {
+            Self::filter_journeys(edge, &nodes);
+        });
+
+        // map global operating period index to local index
         edges.par_iter_mut().for_each(|(_, edge)| {
             let mut global_to_local = HashMap::<usize, usize>::new();
             let mut counter = 0;
@@ -274,31 +311,58 @@ impl Graph {
             edge.timetable.periods = local_ops;
         });
 
-        // filter non-sensical journeys
-        edges.par_iter_mut().for_each(|(_, edge)| {
-            let start_node = &nodes[edge.start_node];
-            let end_node = &nodes[edge.end_node];
-            let distance = great_circle_distance(
-                (start_node.long, start_node.lat),
-                (end_node.long, end_node.lat),
-            );
-            edge.timetable.journeys.retain(|j| {
-                let departure_min = (j.departure % 60) + ((j.departure / 60) * 60);
-                let mut arrival_min = (j.arrival % 60) + ((j.arrival / 60) * 60);
-                if arrival_min < departure_min {
-                    arrival_min += 24 * 60;
-                }
-                let minutes = arrival_min - departure_min;
-                let hours = minutes as f32 / 60.0;
-                let speed = distance / hours;
-                speed < 325.0 || (minutes < 3 && distance < 3.0)
-            });
-        });
-
         Graph {
-            nodes,
-            edges: edges.into_iter().map(|(_, e)| e).collect(),
+            nodes: nodes.vec,
+            edges: edges.into_values().collect(),
         }
+    }
+
+    fn update_walk(walk_edge: &WalkEdge, nodes: &Nodes, edges: &mut HashMap<(usize, usize), Edge>) {
+        let start_idx = nodes.index_by_name(&walk_edge.start).unwrap().node;
+        let end_idx = nodes.index_by_name(&walk_edge.end).unwrap().node;
+        let start_node = nodes.get(start_idx);
+        let end_node = nodes.get(end_idx);
+        let distance = great_circle_distance(
+            (start_node.long, start_node.lat),
+            (end_node.long, end_node.lat),
+        );
+        if distance > 1.0 {
+            return;
+        }
+        let mut forward = edges.entry((start_idx, end_idx)).or_insert(Edge {
+            start_node: start_idx,
+            end_node: end_idx,
+            timetable: Timetable::default(),
+            walk_seconds: u16::MAX,
+        });
+        forward.walk_seconds = walk_edge.duration as u16;
+        let mut backward = edges.entry((end_idx, start_idx)).or_insert(Edge {
+            start_node: end_idx,
+            end_node: end_idx,
+            timetable: Timetable::default(),
+            walk_seconds: u16::MAX,
+        });
+        backward.walk_seconds = walk_edge.duration as u16;
+    }
+
+    fn filter_journeys(edge: &mut Edge, nodes: &Nodes) {
+        let start_node = nodes.get(edge.start_node);
+        let end_node = nodes.get(edge.end_node);
+        let distance = great_circle_distance(
+            (start_node.long, start_node.lat),
+            (end_node.long, end_node.lat),
+        );
+        edge.timetable.journeys.retain(|j| {
+            let departure_min = (j.departure % 60) + ((j.departure / 60) * 60);
+            let mut arrival_min = (j.arrival % 60) + ((j.arrival / 60) * 60);
+            if arrival_min < departure_min {
+                arrival_min += 24 * 60;
+            }
+            let minutes = arrival_min - departure_min;
+            let hours = minutes as f32 / 60.0;
+            let speed = distance / hours;
+            speed < 325.0 || (minutes < 3 && distance < 3.0)
+        });
     }
 
     fn lookup_operating_period(
@@ -309,7 +373,7 @@ impl Graph {
             if global_index < one_data.operating_periods.len() {
                 return Some(&one_data.operating_periods[global_index]);
             }
-            global_index -= one_data.operating_periods.len()
+            global_index -= one_data.operating_periods.len();
         }
         None
     }
