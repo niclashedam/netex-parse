@@ -7,7 +7,6 @@ use zip::ZipArchive;
 use crate::{graph::WalkEdge, parser::NetexData};
 
 mod graph;
-mod neo4j;
 mod parser;
 
 fn main() {
