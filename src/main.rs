@@ -4,29 +4,27 @@ use indicatif::ParallelProgressIterator;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use zip::ZipArchive;
 
-use crate::{parser::NetexData, graph::WalkEdge};
+use crate::{graph::WalkEdge, parser::NetexData};
 
 mod graph;
 mod neo4j;
 mod parser;
 
 fn main() {
-    let zip_stream = std::fs::File::open("20220725_fahrplaene_gesamtdeutschland.zip")
+    let zip_stream = std::fs::File::open("20230925_fahrplaene_gesamtdeutschland.zip")
         .expect("failed to open data");
     let zip_memmap = unsafe { memmap::Mmap::map(&zip_stream).expect("failed mmap") };
     let zip_cursor = std::io::Cursor::new(&zip_memmap);
     let archive = ZipArchive::new(zip_cursor).expect("failed to read zip");
-    let documents: Vec<String> = archive
-        .file_names()
-        .map(str::to_owned)
-        .collect();
+    let documents: Vec<String> = archive.file_names().map(str::to_owned).collect();
     parse(&zip_memmap, "DBDB_80", &documents);
 }
 
 fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
     println!("loading walk data");
     let walk_bytes = std::fs::read("walk.json").expect("failed to read walk data");
-    let walks: Vec<WalkEdge> = serde_json::from_slice(&walk_bytes).expect("failed to deserialize json");
+    let walks: Vec<WalkEdge> =
+        serde_json::from_slice(&walk_bytes).expect("failed to deserialize json");
     let mut data = documents
         .par_iter()
         .progress_count(documents.len() as u64)
@@ -47,7 +45,9 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
         });
     println!("deduping...");
     for d in &mut data {
-        d.scheduled_stop_points.retain(|stop| stop.long > 5.5 && stop.long < 15.5 && stop.lat > 47.0 && stop.lat < 55.5);
+        d.scheduled_stop_points.retain(|stop| {
+            stop.long > 5.5 && stop.long < 15.5 && stop.lat > 47.0 && stop.lat < 55.5
+        });
     }
     let graph = graph::Graph::from_data(&data, &walks);
     let route_count: usize = data.iter().map(|d| d.service_journeys.len()).sum();
@@ -70,8 +70,13 @@ fn dump_csv(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
     opts.write(true).create(true);
     let mut node_writer = std::io::BufWriter::new(opts.open("./nodes.csv")?);
     for node in &graph.nodes {
-        node_writer
-            .write_all(format!("\"{}\",{},{}\n", node.short_name, node.long, node.lat).as_bytes())?;
+        node_writer.write_all(
+            format!(
+                "\"{}\",{},{},{}\n",
+                node.short_name, node.long, node.lat, node.id
+            )
+            .as_bytes(),
+        )?;
     }
     node_writer.flush()?;
 
@@ -95,7 +100,6 @@ fn dump_csv(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
-
     fn node_as_bytes(node: &graph::Node) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         // id is implicit
         let mut data = Vec::<u8>::new();
@@ -108,7 +112,9 @@ fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
         Ok(data)
     }
 
-    fn period_as_bytes(period: &graph::OperatingPeriod)  -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn period_as_bytes(
+        period: &graph::OperatingPeriod,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let mut data = Vec::<u8>::new();
         let mut writer = std::io::Cursor::new(&mut data);
         writer.write_all(&period.from.to_le_bytes())?;

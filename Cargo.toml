@@ -7,11 +7,13 @@ edition = "2021"
 
 [dependencies]
 base64 = "0.13.0"
+geo = "0.26"
 indicatif = {version = "0.16.0", features = ["rayon"]}
 memmap = "0.7.0"
 neo4rs = { git = "https://github.com/Nuckal777/neo4rs" }
 rayon = "1.5.2"
 roxmltree = "0.14.1"
+rstar = "0.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = "1.17.0"

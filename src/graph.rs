@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use geo::{Centroid, HaversineDestination};
 use indicatif::ParallelProgressIterator;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 
@@ -9,6 +10,7 @@ use crate::parser::{
 
 #[derive(Clone, Default, Debug)]
 pub struct Node {
+    pub id: u64,
     pub short_name: String,
     pub long: f32,
     pub lat: f32,
@@ -63,7 +65,7 @@ pub struct Graph {
     pub edges: Vec<Edge>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Indices {
     node: usize,
     data: usize,
@@ -72,52 +74,96 @@ struct Indices {
 
 #[derive(Default, serde::Deserialize)]
 pub struct WalkEdge {
-    pub start: String,
-    pub end: String,
+    pub start: u64,
+    pub end: u64,
     pub duration: f32,
 }
 
 struct Nodes {
     vec: Vec<Node>,
+    // netex ref to indices
     ref_map: HashMap<u64, Indices>,
-    name_map: HashMap<String, Indices>,
+    // calculate id to indices
+    id_map: HashMap<u64, usize>,
+    // name_map: HashMap<String, Indices>,
 }
 
 impl Nodes {
     fn from_data(data: &[NetexData]) -> Nodes {
-        // short name to scheduled point stop index
-        let mut node_map = HashMap::<String, Indices>::new();
+        let mut nodes_by_name = HashMap::<&str, Vec<Indices>>::new();
         let mut ref_to_node_idx = HashMap::<u64, Indices>::new();
-        let mut counter = 0_usize;
         for (data_idx, one_data) in data.iter().enumerate() {
             for (stop_idx, stop) in one_data.scheduled_stop_points.iter().enumerate() {
-                if node_map.contains_key(&stop.short_name) {
-                    ref_to_node_idx.insert(stop.id, node_map[&stop.short_name]);
-                } else {
-                    let indices = Indices {
-                        data: data_idx,
-                        node: counter,
-                        stop: stop_idx,
-                    };
-                    node_map.insert(stop.short_name.clone(), indices);
-                    ref_to_node_idx.insert(stop.id, indices);
-                    counter += 1;
-                }
+                let indices = Indices {
+                    data: data_idx,
+                    node: 0,
+                    stop: stop_idx,
+                };
+                nodes_by_name
+                    .entry(&stop.short_name)
+                    .and_modify(|stops| stops.push(indices))
+                    .or_insert(vec![indices]);
             }
         }
-        let mut nodes = vec![Node::default(); node_map.len()];
-        for idx in node_map.values() {
-            let current = &data[idx.data].scheduled_stop_points[idx.stop];
-            nodes[idx.node] = Node {
-                short_name: current.short_name.clone(),
-                long: current.long,
-                lat: current.lat,
-            };
+        let mut id_map = HashMap::<u64, usize>::new();
+        let mut nodes: Vec<Node> = vec![];
+        let distance = 1000.0; // radius in meters
+        for (name, stops) in nodes_by_name {
+            type TreeObj<'a> = rstar::primitives::GeomWithData<geo::Coord<f32>, Indices>;
+            let mut tree = rstar::RTree::<TreeObj>::bulk_load(
+                stops
+                    .iter()
+                    .map(|indices| {
+                        let stop = &data[indices.data].scheduled_stop_points[indices.stop];
+                        TreeObj::new(geo::Coord::from([stop.long, stop.lat]), *indices)
+                    })
+                    .collect(),
+            );
+            while tree.size() > 0 {
+                let indices = tree.iter().next().unwrap().data;
+                let current = &data[indices.data].scheduled_stop_points[indices.stop];
+                let center = geo::Point::from((current.long, current.lat));
+                let corner1 = center.haversine_destination(45.0, distance);
+                let corner2 = center.haversine_destination(225.0, distance);
+                let aabb =
+                    rstar::AABB::<geo::Coord<f32>>::from_corners(corner1.into(), corner2.into());
+                let local: Vec<TreeObj> = tree.drain_in_envelope(aabb).collect();
+                for point in &local {
+                    let point_idx = point.data;
+                    let point_stop = &data[point_idx.data].scheduled_stop_points[point_idx.stop];
+                    ref_to_node_idx.insert(
+                        point_stop.id,
+                        Indices {
+                            node: nodes.len(),
+                            data: point_idx.data,
+                            stop: point_idx.stop,
+                        },
+                    );
+                }
+                let coords: Vec<geo::Coord<f32>> =
+                    local.iter().map(TreeObj::geom).copied().collect();
+                let centroid = geo::LineString::new(coords)
+                    .centroid()
+                    .expect("failed to calculate centroid");
+                // current.id is not consistent across runs
+                // there are different scheduled_point_stops with the same name + coords that are different entities
+                // so xor all stops in a cluster, risking hash collisions
+                let node_id = local.iter().fold(0, |acc, l| {
+                    data[l.data.data].scheduled_stop_points[l.data.stop].id ^ acc
+                });
+                id_map.insert(node_id, nodes.len());
+                nodes.push(Node {
+                    lat: centroid.y(),
+                    long: centroid.x(),
+                    short_name: name.to_owned(),
+                    id: node_id,
+                });
+            }
         }
         Nodes {
-            name_map: node_map,
-            ref_map: ref_to_node_idx,
+            id_map,
             vec: nodes,
+            ref_map: ref_to_node_idx,
         }
     }
 
@@ -125,8 +171,8 @@ impl Nodes {
         &self.vec[idx]
     }
 
-    fn index_by_name(&self, name: &str) -> Option<&Indices> {
-        self.name_map.get(name)
+    fn index_by_id(&self, id: u64) -> Option<usize> {
+        self.id_map.get(&id).copied()
     }
 
     fn index_by_stop_ref(&self, stop_ref: u64) -> Option<&Indices> {
@@ -318,8 +364,8 @@ impl Graph {
     }
 
     fn update_walk(walk_edge: &WalkEdge, nodes: &Nodes, edges: &mut HashMap<(usize, usize), Edge>) {
-        let start_idx = nodes.index_by_name(&walk_edge.start).unwrap().node;
-        let end_idx = nodes.index_by_name(&walk_edge.end).unwrap().node;
+        let start_idx = nodes.index_by_id(walk_edge.start).unwrap();
+        let end_idx = nodes.index_by_id(walk_edge.end).unwrap();
         let start_node = nodes.get(start_idx);
         let end_node = nodes.get(end_idx);
         let distance = great_circle_distance(
@@ -329,16 +375,16 @@ impl Graph {
         if distance > 1.0 {
             return;
         }
-        let mut forward = edges.entry((start_idx, end_idx)).or_insert(Edge {
+        let forward = edges.entry((start_idx, end_idx)).or_insert(Edge {
             start_node: start_idx,
             end_node: end_idx,
             timetable: Timetable::default(),
             walk_seconds: u16::MAX,
         });
         forward.walk_seconds = walk_edge.duration as u16;
-        let mut backward = edges.entry((end_idx, start_idx)).or_insert(Edge {
+        let backward = edges.entry((end_idx, start_idx)).or_insert(Edge {
             start_node: end_idx,
-            end_node: end_idx,
+            end_node: start_idx,
             timetable: Timetable::default(),
             walk_seconds: u16::MAX,
         });
