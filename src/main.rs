@@ -98,11 +98,21 @@ fn dump_csv(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct MetaNode {
+    name: String,
+    // large u64 do not survive JSON.parse over in JSLand
+    // so we use a string here
+    id: String,
+    coords: [f32; 2]
+}
+
 fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
     fn node_as_bytes(node: &graph::Node) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         // id is implicit
         let mut data = Vec::<u8>::new();
         let mut writer = std::io::Cursor::new(&mut data);
+        writer.write_all(&node.id.to_le_bytes())?;
         writer.write_all(&node.lat.to_le_bytes())?;
         writer.write_all(&node.long.to_le_bytes())?;
         let name_bytes = node.short_name.as_bytes();
@@ -147,7 +157,7 @@ fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true);
+    opts.write(true).create(true).truncate(true);
     let mut writer = std::io::BufWriter::new(opts.open("./graph.bin")?);
     // TODO: magic number, file version
     // nodes with data
@@ -167,5 +177,12 @@ fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
     writer.write_all(&(graph.edges.len() as u32).to_le_bytes())?;
     writer.write_all(&edge_data)?;
     writer.flush()?;
+
+    let metas: Vec<MetaNode> = graph.nodes.iter().map(|n| MetaNode {
+        coords: [n.long, n.lat],
+        id: n.id.to_string(),
+        name: n.short_name.clone(),
+    }).collect();
+    std::fs::write("nodes.json", &serde_json::to_vec(&metas)?)?;
     Ok(())
 }

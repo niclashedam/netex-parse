@@ -148,9 +148,13 @@ impl Nodes {
                 // current.id is not consistent across runs
                 // there are different scheduled_point_stops with the same name + coords that are different entities
                 // so xor all stops in a cluster, risking hash collisions
-                let node_id = local.iter().fold(0, |acc, l| {
-                    data[l.data.data].scheduled_stop_points[l.data.stop].id ^ acc
-                });
+                let mut node_ids: Vec<u64> = local
+                    .iter()
+                    .map(|val| data[val.data.data].scheduled_stop_points[val.data.stop].id)
+                    .collect();
+                node_ids.sort_unstable();
+                node_ids.dedup();
+                let node_id = node_ids.into_iter().reduce(|l, r| l ^ r).unwrap();
                 id_map.insert(node_id, nodes.len());
                 nodes.push(Node {
                     lat: centroid.y(),
@@ -364,8 +368,13 @@ impl Graph {
     }
 
     fn update_walk(walk_edge: &WalkEdge, nodes: &Nodes, edges: &mut HashMap<(usize, usize), Edge>) {
-        let start_idx = nodes.index_by_id(walk_edge.start).unwrap();
-        let end_idx = nodes.index_by_id(walk_edge.end).unwrap();
+        let (start_idx, end_idx) = match (nodes.index_by_id(walk_edge.start), nodes.index_by_id(walk_edge.end)) {
+            (Some(start), Some(end)) => (start, end),
+            _ => {
+                println!("{} -> {} borked", walk_edge.start, walk_edge.end);
+                return;
+            }
+        };
         let start_node = nodes.get(start_idx);
         let end_node = nodes.get(end_idx);
         let distance = great_circle_distance(
