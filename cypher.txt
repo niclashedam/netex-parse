@@ -1,5 +1,0 @@
-CREATE TEXT INDEX stop_name_index IF NOT EXISTS FOR (n:Stop) ON (n.name)
-
-LOAD CSV FROM "file:///nodes.csv" AS node MERGE (:Stop { name: node[0], loc: point({longitude: toFloat(node[1]), latitude: toFloat(node[2])}) })
-
-LOAD CSV FROM "file:///edges.csv" AS edge MATCH (a:Stop),(b:Stop) WHERE a.name = edge[0] and b.name = edge[1] MERGE (a)-[c:Connection]->(b) ON CREATE SET c.timetable = [edge[2]] ON MATCH SET c.timetable = c.timetable + [edge[2]]

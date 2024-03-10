@@ -368,12 +368,12 @@ impl Graph {
     }
 
     fn update_walk(walk_edge: &WalkEdge, nodes: &Nodes, edges: &mut HashMap<(usize, usize), Edge>) {
-        let (start_idx, end_idx) = match (nodes.index_by_id(walk_edge.start), nodes.index_by_id(walk_edge.end)) {
-            (Some(start), Some(end)) => (start, end),
-            _ => {
-                println!("{} -> {} borked", walk_edge.start, walk_edge.end);
-                return;
-            }
+        let (Some(start_idx), Some(end_idx)) = (
+            nodes.index_by_id(walk_edge.start),
+            nodes.index_by_id(walk_edge.end),
+        ) else {
+            println!("{} -> {} borked", walk_edge.start, walk_edge.end);
+            return;
         };
         let start_node = nodes.get(start_idx);
         let end_node = nodes.get(end_idx);

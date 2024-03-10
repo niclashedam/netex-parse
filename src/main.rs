@@ -1,5 +1,9 @@
-use std::io::Write;
+use std::{
+    io::Write,
+    path::PathBuf,
+};
 
+use clap::{Parser, ValueEnum};
 use indicatif::ParallelProgressIterator;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use zip::ZipArchive;
@@ -9,25 +13,70 @@ use crate::{graph::WalkEdge, parser::NetexData};
 mod graph;
 mod parser;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum OutputFormat {
+    Csv,
+    Binary,
+}
+
+/// Multi-threaded parser for public transport information in the netex format
+/// that outputs graphs for stations and timetables
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+pub struct Args {
+    /// Path to a zip file containing netex documents.
+    #[clap()]
+    netex_file: PathBuf,
+
+    /// Output format. CSV creates a nodes.csv and edges.csv file.
+    #[clap(short, long, value_parser, value_enum)]
+    output_format: OutputFormat,
+
+    /// Path to json file containing walkway durations between stations.
+    #[clap(short, long)]
+    walkways: Option<PathBuf>,
+
+    /// Substring the netex documents file names must included.
+    #[clap(short, long, default_value = "")]
+    filter: String,
+}
+
 fn main() {
-    let zip_stream = std::fs::File::open("20230925_fahrplaene_gesamtdeutschland.zip")
-        .expect("failed to open data");
+    let args = Args::parse();
+    let zip_stream = std::fs::File::open(args.netex_file).expect("failed to open data");
     let zip_memmap = unsafe { memmap::Mmap::map(&zip_stream).expect("failed mmap") };
     let zip_cursor = std::io::Cursor::new(&zip_memmap);
     let archive = ZipArchive::new(zip_cursor).expect("failed to read zip");
-    let documents: Vec<String> = archive.file_names().map(str::to_owned).collect();
-    parse(&zip_memmap, "DBDB_80", &documents);
+    let documents: Vec<String> = archive
+        .file_names()
+        .filter(|f| f.contains(&args.filter))
+        .map(str::to_owned)
+        .collect();
+    let walkways: Vec<WalkEdge> = match args.walkways {
+        None => vec![],
+        Some(path) => {
+            println!("loading walk data");
+            let walk_bytes = std::fs::read(path).expect("failed to read walk data");
+            serde_json::from_slice(&walk_bytes).expect("failed to deserialize json")
+        }
+    };
+    let graph = parse(&zip_memmap, &documents, &walkways);
+    println!(
+        "{} has {} deduped nodes and {} deduped edges.",
+        args.filter,
+        graph.nodes.len(),
+        graph.edges.len(),
+    );
+    match args.output_format {
+        OutputFormat::Csv => dump_csv(&graph).expect("failed to dump csv"),
+        OutputFormat::Binary => dump_binary(&graph).expect("failed to dump binary"),
+    }
 }
 
-fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
-    println!("loading walk data");
-    let walk_bytes = std::fs::read("walk.json").expect("failed to read walk data");
-    let walks: Vec<WalkEdge> =
-        serde_json::from_slice(&walk_bytes).expect("failed to deserialize json");
+fn parse(archive: &memmap::Mmap, documents: &[String], walkways: &[WalkEdge]) -> graph::Graph {
     let mut data = documents
         .par_iter()
         .progress_count(documents.len() as u64)
-        // .filter(|doc| doc.contains(key))
         .map(|doc| {
             let zip_cursor = std::io::Cursor::new(archive);
             let mut archive = ZipArchive::new(zip_cursor).expect("failed to read zip");
@@ -48,31 +97,21 @@ fn parse(archive: &memmap::Mmap, key: &str, documents: &[String]) {
             stop.long > 5.5 && stop.long < 15.5 && stop.lat > 47.0 && stop.lat < 55.5
         });
     }
-    let graph = graph::Graph::from_data(&data, &walks);
-    let route_count: usize = data.iter().map(|d| d.service_journeys.len()).sum();
-    let line_count: usize = data.iter().map(|d| d.lines.len()).sum();
-    println!(
-        "{} has {} deduped nodes and {} deduped edges and {} timetabled routes and {} lines.",
-        key,
-        graph.nodes.len(),
-        graph.edges.len(),
-        route_count,
-        line_count,
-    );
-    drop(data);
-    // dump_csv(&graph).expect("failed to dump csv");
-    dump_binary(&graph).expect("failed to dump binary");
+    graph::Graph::from_data(&data, walkways)
 }
 
 fn dump_csv(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true);
+    opts.write(true).create(true).truncate(true);
     let mut node_writer = std::io::BufWriter::new(opts.open("./nodes.csv")?);
     for node in &graph.nodes {
         node_writer.write_all(
             format!(
                 "\"{}\",{},{},{}\n",
-                node.short_name, node.long, node.lat, node.id
+                node.short_name.replace('"', "'"),
+                node.long,
+                node.lat,
+                node.id
             )
             .as_bytes(),
         )?;
@@ -104,7 +143,7 @@ struct MetaNode {
     // large u64 do not survive JSON.parse over in JSLand
     // so we use a string here
     id: String,
-    coords: [f32; 2]
+    coords: [f32; 2],
 }
 
 fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
@@ -178,11 +217,15 @@ fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
     writer.write_all(&edge_data)?;
     writer.flush()?;
 
-    let metas: Vec<MetaNode> = graph.nodes.iter().map(|n| MetaNode {
-        coords: [n.long, n.lat],
-        id: n.id.to_string(),
-        name: n.short_name.clone(),
-    }).collect();
-    std::fs::write("nodes.json", &serde_json::to_vec(&metas)?)?;
+    let metas: Vec<MetaNode> = graph
+        .nodes
+        .iter()
+        .map(|n| MetaNode {
+            coords: [n.long, n.lat],
+            id: n.id.to_string(),
+            name: n.short_name.clone(),
+        })
+        .collect();
+    std::fs::write("nodes.json", serde_json::to_vec(&metas)?)?;
     Ok(())
 }
