@@ -122,12 +122,12 @@ impl NetexData {
                 .collect();
         data.day_type_assignments = day_type_assignments?;
 
-        let lines: Result<Vec<Line>, Box<dyn std::error::Error>> = document
+        let lines: Vec<Line> = document
             .descendants()
             .filter(|node| node.tag_name().name() == "Line")
             .map(|node| NetexData::parse_line(&node))
             .collect();
-        data.lines = lines?;
+        data.lines = lines;
 
         let authorities: Vec<Authority> = document
             .descendants()
@@ -148,21 +148,21 @@ impl NetexData {
         for child in node.descendants() {
             match child.tag_name().name() {
                 "ShortName" | "Name" => {
-                    result.short_name = child.text().unwrap_or_default().replace('"', "")
+                    result.short_name = child.text().unwrap_or_default().replace('"', "");
                 }
                 "Longitude" => {
                     result.long = child
                         .text()
                         .unwrap_or_default()
                         .parse::<f32>()?
-                        .clamp(-180.0, 180.0)
+                        .clamp(-180.0, 180.0);
                 }
                 "Latitude" => {
                     result.lat = child
                         .text()
                         .unwrap_or_default()
                         .parse::<f32>()?
-                        .clamp(-90.0, 90.0)
+                        .clamp(-90.0, 90.0);
                 }
                 _ => {}
             }
@@ -265,12 +265,12 @@ impl NetexData {
                 "ToDate" => result.to = Self::parse_date(child.text().unwrap_or_default()),
                 "ValidDayBits" => {
                     result.valid_day_bits =
-                        Self::parse_day_bits(child.text().unwrap_or_default().to_owned())
+                        Self::parse_day_bits(child.text().unwrap_or_default().to_owned());
                 }
                 _ => {}
             }
         }
-        return result;
+        result
     }
 
     fn parse_day_type_assignment(
@@ -281,21 +281,22 @@ impl NetexData {
             match child.tag_name().name() {
                 "OperatingPeriodRef" => {
                     assignment.operating_period =
-                        xxh3_64(child.attribute("ref").unwrap_or_default().as_bytes())
+                        xxh3_64(child.attribute("ref").unwrap_or_default().as_bytes());
                 }
                 "DayTypeRef" => {
-                    assignment.day_type = xxh3_64(child.attribute("ref").unwrap_or_default().as_bytes())
+                    assignment.day_type =
+                        xxh3_64(child.attribute("ref").unwrap_or_default().as_bytes());
                 }
                 "isAvailable" => {
-                    assignment.is_available = child.text().unwrap_or_default().parse()?
+                    assignment.is_available = child.text().unwrap_or_default().parse()?;
                 }
                 _ => {}
             }
         }
-        return Ok(assignment);
+        Ok(assignment)
     }
 
-    fn parse_line(node: &roxmltree::Node) -> Result<Line, Box<dyn std::error::Error>> {
+    fn parse_line(node: &roxmltree::Node) -> Line {
         let mut result = Line {
             id: xxh3_64(node.attribute("id").unwrap_or_default().as_bytes()),
             ..Line::default()
@@ -306,12 +307,13 @@ impl NetexData {
                     result.short_name = child.text().unwrap_or_default().to_owned();
                 }
                 "AuthorityRef" => {
-                    result.authority = xxh3_64(child.attribute("ref").unwrap_or_default().as_bytes());
+                    result.authority =
+                        xxh3_64(child.attribute("ref").unwrap_or_default().as_bytes());
                 }
                 _ => {}
             }
         }
-        Ok(result)
+        result
     }
 
     fn parse_authority(node: &roxmltree::Node) -> Authority {
@@ -320,11 +322,8 @@ impl NetexData {
             ..Authority::default()
         };
         for child in node.descendants() {
-            match child.tag_name().name() {
-                "ShortName" => {
-                    result.short_name = child.text().unwrap_or_default().to_owned();
-                }
-                _ => {}
+            if child.tag_name().name() == "ShortName" {
+                result.short_name = child.text().unwrap_or_default().to_owned();
             }
         }
         result
@@ -333,6 +332,7 @@ impl NetexData {
     // In netex departure and arrival time are reqpresented as hh:mm:ss
     // seconds are mostly 00 anyway, so we only care about the minute of day
     // lets also assume times are represented as ascii chars
+    #[allow(clippy::cast_lossless)]
     fn parse_minutes(value: &str) -> u16 {
         const ASCII_ZERO: u16 = 48;
         let bytes = value.as_bytes();
@@ -345,11 +345,12 @@ impl NetexData {
     }
 
     // Parses "2022-06-13T00:00:00" as 220613
+    #[allow(clippy::cast_lossless)]
     fn parse_date(value: &str) -> u32 {
         const ASCII_ZERO: u32 = 48;
         let bytes = value.as_bytes();
         let mut result = 0_u32;
-        result += (bytes[2] as u32 - ASCII_ZERO) * 100000;
+        result += (bytes[2] as u32 - ASCII_ZERO) * 100_000;
         result += (bytes[3] as u32 - ASCII_ZERO) * 10000;
         result += (bytes[5] as u32 - ASCII_ZERO) * 1000;
         result += (bytes[6] as u32 - ASCII_ZERO) * 100;
@@ -366,12 +367,13 @@ impl NetexData {
         }
         let mut result = Vec::<u8>::with_capacity(value.len() / 8);
         for group in value.as_bytes().chunks(8) {
-            result.push(Self::parse_day_bit_group(group))
+            result.push(Self::parse_day_bit_group(group));
         }
         result
     }
 
     // value should be at least 8 byte long
+    #[allow(clippy::needless_range_loop)]
     fn parse_day_bit_group(value: &[u8]) -> u8 {
         const ASCII_ZERO: u8 = 48;
         let mut result = 0_u8;
@@ -398,6 +400,6 @@ mod tests {
     #[test]
     fn parse_date() {
         let result = super::NetexData::parse_date("2022-06-13T00:00:00");
-        assert_eq!(result, 220613);
+        assert_eq!(result, 22_06_13);
     }
 }

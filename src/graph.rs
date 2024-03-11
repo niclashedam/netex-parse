@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use base64::engine::Engine;
 use geo::{Centroid, HaversineDestination};
 use indicatif::ParallelProgressIterator;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
@@ -349,7 +350,8 @@ impl Graph {
                 local_ops[*local] = OperatingPeriod {
                     from: uic_op.from,
                     to: uic_op.to,
-                    valid_day_bits: base64::encode(&uic_op.valid_day_bits),
+                    valid_day_bits: base64::engine::general_purpose::STANDARD
+                        .encode(&uic_op.valid_day_bits),
                     valid_day: uic_op.valid_day_bits.clone(),
                 }
             }
@@ -367,6 +369,7 @@ impl Graph {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn update_walk(walk_edge: &WalkEdge, nodes: &Nodes, edges: &mut HashMap<(usize, usize), Edge>) {
         let (Some(start_idx), Some(end_idx)) = (
             nodes.index_by_id(walk_edge.start),
@@ -400,6 +403,7 @@ impl Graph {
         backward.walk_seconds = walk_edge.duration as u16;
     }
 
+    #[allow(clippy::cast_lossless)]
     fn filter_journeys(edge: &mut Edge, nodes: &Nodes) {
         let start_node = nodes.get(edge.start_node);
         let end_node = nodes.get(edge.end_node);

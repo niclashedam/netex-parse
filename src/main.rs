@@ -1,7 +1,4 @@
-use std::{
-    io::Write,
-    path::PathBuf,
-};
+use std::{io::Write, path::PathBuf};
 
 use clap::{Parser, ValueEnum};
 use indicatif::ParallelProgressIterator;
@@ -146,6 +143,7 @@ struct MetaNode {
     coords: [f32; 2],
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
     fn node_as_bytes(node: &graph::Node) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         // id is implicit
