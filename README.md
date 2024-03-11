@@ -1,5 +1,7 @@
 # netex-parse
 
+![Build Status](https://img.shields.io/github/actions/workflow/status/Nuckal777/netex-parse/test.yaml?branch=master)
+
 Multi-threaded parser for public transport data in the [NeTEx](https://netex-cen.eu/) format build with Rust, which generates graphs for stations and connections with timetables as output.
 It can produce CSV files or a custom memory-mappable binary format.
 During processing non-sensical data is filtered.
