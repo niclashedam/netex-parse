@@ -23,8 +23,8 @@ pub struct DayTypeAssignment {
 #[derive(Clone, Default)]
 pub struct UicOperatingPeriod {
     pub id: u64,
-    pub from: u32,
-    pub to: u32,
+    pub from: u16,
+    pub to: u16,
     pub valid_day_bits: Vec<u8>,
 }
 
@@ -344,19 +344,33 @@ impl NetexData {
         result
     }
 
-    // Parses "2022-06-13T00:00:00" as 220613
+    // Parses "2022-06-13T00:00:00" into bits
+    // day 5 bit, month 4 bit, year 7 bit
     #[allow(clippy::cast_lossless)]
-    fn parse_date(value: &str) -> u32 {
-        const ASCII_ZERO: u32 = 48;
+    fn parse_date(value: &str) -> u16 {
+        const ASCII_ZERO: u16 = 48;
         let bytes = value.as_bytes();
-        let mut result = 0_u32;
-        result += (bytes[2] as u32 - ASCII_ZERO) * 100_000;
-        result += (bytes[3] as u32 - ASCII_ZERO) * 10000;
-        result += (bytes[5] as u32 - ASCII_ZERO) * 1000;
-        result += (bytes[6] as u32 - ASCII_ZERO) * 100;
-        result += (bytes[8] as u32 - ASCII_ZERO) * 10;
-        result += bytes[9] as u32 - ASCII_ZERO;
-        result
+        // year
+        let mut year: u16 = (bytes[2] as u16 - ASCII_ZERO) * 10;
+        assert!(year < 128);
+        year += bytes[3] as u16 - ASCII_ZERO;
+        // month
+        let mut month: u16 = (bytes[5] as u16 - ASCII_ZERO) * 10;
+        assert!(month < 16);
+        month += bytes[6] as u16 - ASCII_ZERO;
+        year |= month << 7;
+        // day
+        let mut day: u16 = (bytes[8] as u16 - ASCII_ZERO) * 10;
+        assert!(day < 32);
+        day += bytes[9] as u16 - ASCII_ZERO;
+        year | (day << 11)
+    }
+
+    fn decode_date(value: u16) -> (u16, u16, u16) {
+        let year = value & 0b_0000_0000_0111_1111;
+        let month = (value >> 7) & 0b_0000_0000_0000_1111;
+        let day = (value >> 11) & 0b_0000_0000_0001_1111;
+        (year, month, day)
     }
 
     // Parses "11001100"... as Vec<u8>
@@ -399,7 +413,16 @@ mod tests {
 
     #[test]
     fn parse_date() {
-        let result = super::NetexData::parse_date("2022-06-13T00:00:00");
-        assert_eq!(result, 22_06_13);
+        let result = super::NetexData::parse_date("2003-02-01T00:00:00");
+        assert_eq!(result, 0b_0000_1001_0000_0011);
+    }
+
+    #[test]
+    fn decode_date() {
+        let parsed = super::NetexData::parse_date("2045-11-23T00:00:00");
+        let (year, month, day) = super::NetexData::decode_date(parsed);
+        assert_eq!(year, 45_u16);
+        assert_eq!(month, 11_u16);
+        assert_eq!(day, 23_u16);
     }
 }

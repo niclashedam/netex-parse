@@ -36,9 +36,9 @@ pub struct Journey {
 #[derive(Clone, Default, Debug, serde::Serialize)]
 pub struct OperatingPeriod {
     #[serde(rename(serialize = "f"))]
-    pub from: u32,
+    pub from: u16,
     #[serde(rename(serialize = "t"))]
-    pub to: u32,
+    pub to: u16,
     #[serde(rename(serialize = "v"))]
     pub valid_day_bits: String,
     pub valid_day: Vec<u8>,

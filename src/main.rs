@@ -153,7 +153,8 @@ fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
         writer.write_all(&node.lat.to_le_bytes())?;
         writer.write_all(&node.long.to_le_bytes())?;
         let name_bytes = node.short_name.as_bytes();
-        writer.write_all(&(name_bytes.len() as u32).to_le_bytes())?;
+        let name_len: u16 = name_bytes.len().try_into()?;
+        writer.write_all(&name_len.to_le_bytes())?;
         writer.write_all(name_bytes)?;
         Ok(data)
     }
@@ -165,7 +166,8 @@ fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
         let mut writer = std::io::Cursor::new(&mut data);
         writer.write_all(&period.from.to_le_bytes())?;
         writer.write_all(&period.to.to_le_bytes())?;
-        writer.write_all(&(period.valid_day.len() as u32).to_le_bytes())?;
+        let day_len_byte: u8 = period.valid_day.len().try_into()?;
+        writer.write_all(&[day_len_byte])?;
         writer.write_all(&period.valid_day)?;
         Ok(data)
     }
@@ -177,8 +179,8 @@ fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
         writer.write_all(&(edge.end_node as u32).to_le_bytes())?;
         writer.write_all(&edge.walk_seconds.to_le_bytes())?;
         let journeys = &edge.timetable.journeys;
-        // arrival, departure, operating period -> 3x u16
-        writer.write_all(&((journeys.len() * 6) as u32).to_le_bytes())?;
+        let journeys_len: u16 = journeys.len().try_into()?;
+        writer.write_all(&journeys_len.to_le_bytes())?;
         for journey in journeys {
             writer.write_all(&journey.arrival.to_le_bytes())?;
             writer.write_all(&journey.departure.to_le_bytes())?;
@@ -188,7 +190,8 @@ fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
         for period in &edge.timetable.periods {
             periods.extend(period_as_bytes(period)?);
         }
-        writer.write_all(&(periods.len() as u32).to_le_bytes())?;
+        let periods_len: u16 = periods.len().try_into()?;
+        writer.write_all(&periods_len.to_le_bytes())?;
         writer.write_all(&periods)?;
         Ok(data)
     }
