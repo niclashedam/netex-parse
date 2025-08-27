@@ -366,12 +366,12 @@ impl NetexData {
         year | (day << 11)
     }
 
-    /* fn decode_date(value: u16) -> (u16, u16, u16) {
+    fn decode_date(value: u16) -> (u16, u16, u16) {
         let year = value & 0b_0000_0000_0111_1111;
         let month = (value >> 7) & 0b_0000_0000_0000_1111;
         let day = (value >> 11) & 0b_0000_0000_0001_1111;
         (year, month, day)
-    } */
+    }
 
     // Parses "11001100"... as Vec<u8>
     fn parse_day_bits(mut value: String) -> Vec<u8> {
