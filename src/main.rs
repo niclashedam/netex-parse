@@ -89,11 +89,6 @@ fn parse(archive: &memmap::Mmap, documents: &[String], walkways: &[WalkEdge]) ->
             accum
         });
     println!("deduping...");
-    for d in &mut data {
-        d.scheduled_stop_points.retain(|stop| {
-            stop.long > 5.5 && stop.long < 15.5 && stop.lat > 47.0 && stop.lat < 55.5
-        });
-    }
     graph::Graph::from_data(&data, walkways)
 }
 
