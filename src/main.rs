@@ -71,7 +71,7 @@ fn main() {
 }
 
 fn parse(archive: &memmap::Mmap, documents: &[String], walkways: &[WalkEdge]) -> graph::Graph {
-    let mut data = documents
+    let data = documents
         .par_iter()
         .progress_count(documents.len() as u64)
         .map(|doc| {

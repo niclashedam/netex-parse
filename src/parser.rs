@@ -304,7 +304,7 @@ impl NetexData {
         for child in node.descendants() {
             match child.tag_name().name() {
                 "ShortName" => {
-                    result.short_name = child.text().unwrap_or_default().to_owned();
+                    child.text().unwrap_or_default().clone_into(&mut result.short_name);
                 }
                 "AuthorityRef" => {
                     result.authority =
@@ -323,7 +323,7 @@ impl NetexData {
         };
         for child in node.descendants() {
             if child.tag_name().name() == "ShortName" {
-                result.short_name = child.text().unwrap_or_default().to_owned();
+                child.text().unwrap_or_default().clone_into(&mut result.short_name);
             }
         }
         result
@@ -366,16 +366,16 @@ impl NetexData {
         year | (day << 11)
     }
 
-    fn decode_date(value: u16) -> (u16, u16, u16) {
+    /* fn decode_date(value: u16) -> (u16, u16, u16) {
         let year = value & 0b_0000_0000_0111_1111;
         let month = (value >> 7) & 0b_0000_0000_0000_1111;
         let day = (value >> 11) & 0b_0000_0000_0001_1111;
         (year, month, day)
-    }
+    } */
 
     // Parses "11001100"... as Vec<u8>
     fn parse_day_bits(mut value: String) -> Vec<u8> {
-        let pad_len = 8 - (value.as_bytes().len() % 8);
+        let pad_len = 8 - (value.len() % 8);
         if pad_len != 8 {
             value.push_str(&"0".repeat(pad_len));
         }
