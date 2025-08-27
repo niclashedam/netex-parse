@@ -14,10 +14,11 @@ mod parser;
 pub enum OutputFormat {
     Csv,
     Binary,
+    Json,
 }
 
 /// Multi-threaded parser for public transport information in the netex format
-/// that outputs graphs for stations and timetables
+/// that outputs graphs for stations and timetables.
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 pub struct Args {
@@ -25,7 +26,10 @@ pub struct Args {
     #[clap()]
     netex_file: PathBuf,
 
-    /// Output format. CSV creates a nodes.csv and edges.csv file.
+    /// Output format.
+    /// - CSV    -> nodes.csv + edges.csv
+    /// - Binary -> graph.bin (+ nodes.json for meta)
+    /// - Json   -> graph.json (nodes + edges, JS-safe IDs)
     #[clap(short, long, value_parser, value_enum)]
     output_format: OutputFormat,
 
@@ -33,7 +37,7 @@ pub struct Args {
     #[clap(short, long)]
     walkways: Option<PathBuf>,
 
-    /// Substring the netex documents file names must included.
+    /// Substring the netex documents file names must include.
     #[clap(short, long, default_value = "")]
     filter: String,
 }
@@ -59,7 +63,7 @@ fn main() {
     };
     let graph = parse(&zip_memmap, &documents, &walkways);
     println!(
-        "{} has {} deduped nodes and {} deduped edges.",
+        "\"{}\" has {} deduped nodes and {} deduped edges.",
         args.filter,
         graph.nodes.len(),
         graph.edges.len(),
@@ -67,6 +71,7 @@ fn main() {
     match args.output_format {
         OutputFormat::Csv => dump_csv(&graph).expect("failed to dump csv"),
         OutputFormat::Binary => dump_binary(&graph).expect("failed to dump binary"),
+        OutputFormat::Json => dump_json(&graph).expect("failed to dump json"),
     }
 }
 
@@ -223,5 +228,60 @@ fn dump_binary(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
     std::fs::write("nodes.json", serde_json::to_vec(&metas)?)?;
+    Ok(())
+}
+
+fn dump_json(graph: &graph::Graph) -> Result<(), Box<dyn std::error::Error>> {
+    #[derive(serde::Serialize)]
+    struct JsonNode {
+        name: String,
+        // stringified to avoid IEEE-754 loss in JS
+        id: String,
+        // [lon, lat] to match MetaNode / existing conventions
+        coords: [f32; 2],
+    }
+
+    #[derive(serde::Serialize)]
+    struct JsonEdge {
+        // node IDs as strings
+        from: String,
+        to: String,
+        walk_seconds: u16,
+        // keep timetable as a raw JSON value (no new public types needed)
+        timetable: serde_json::Value,
+    }
+
+    #[derive(serde::Serialize)]
+    struct GraphOut {
+        nodes: Vec<JsonNode>,
+        edges: Vec<JsonEdge>,
+    }
+
+    let nodes: Vec<JsonNode> = graph
+        .nodes
+        .iter()
+        .map(|n| JsonNode {
+            name: n.short_name.clone(),
+            id: n.id.to_string(),
+            coords: [n.long, n.lat],
+        })
+        .collect();
+
+    let edges: Vec<JsonEdge> = graph
+        .edges
+        .iter()
+        .map(|e| JsonEdge {
+            from: graph.nodes[e.start_node].id.to_string(),
+            to: graph.nodes[e.end_node].id.to_string(),
+            walk_seconds: e.walk_seconds,
+            timetable: serde_json::to_value(&e.timetable)
+                .expect("failed to serialize timetable"),
+        })
+        .collect();
+
+    let out = GraphOut { nodes, edges };
+    let file = std::fs::File::create("graph.json")?;
+    let writer = std::io::BufWriter::new(file);
+    serde_json::to_writer_pretty(writer, &out)?;
     Ok(())
 }
